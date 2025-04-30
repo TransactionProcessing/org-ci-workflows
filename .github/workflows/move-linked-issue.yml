@@ -143,7 +143,9 @@ jobs:
 
           echo "field_id=$FIELD_ID" >> $GITHUB_OUTPUT
           echo "option_id=$OPTION_ID" >> $GITHUB_OUTPUT
-
+        env:
+          GH_TOKEN: ${{ secrets.gh_token }}
+          
       - name: Update status field for issues in project
         run: |
           PROJECT_ID=${{ steps.project.outputs.project_id }}
