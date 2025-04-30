@@ -143,7 +143,12 @@ jobs:
               }
             }' -f projectId="$PROJECT_ID" -f fieldName="$FIELD_NAME" | jq -r '.data.node.fields.nodes[] | select(.name == "'"$FIELD_NAME"'") | .id')
       
-          # Query for the "In Progress" option ID (or the specified column name)
+          if [ -z "$FIELD_ID" ]; then
+            echo "Could not find the field ID for '$FIELD_NAME'."
+            exit 1
+          fi
+      
+          # Query for the "In Progress" option ID (or the specified column name) for the "Status" field
           OPTION_ID=$(gh api graphql -f query='
             query($fieldId: ID!, $optionName: String!) {
               node(id: $fieldId) {
@@ -158,8 +163,8 @@ jobs:
               }
             }' -f fieldId="$FIELD_ID" -f optionName="$STATUS_OPTION_NAME" | jq -r '.data.node.options.nodes[] | select(.name == "'"$STATUS_OPTION_NAME"'") | .id')
       
-          if [ -z "$FIELD_ID" ] || [ -z "$OPTION_ID" ]; then
-            echo "Could not find field or option IDs."
+          if [ -z "$OPTION_ID" ]; then
+            echo "Could not find the option ID for '$STATUS_OPTION_NAME'."
             exit 1
           fi
       
@@ -167,6 +172,7 @@ jobs:
           echo "option_id=$OPTION_ID" >> $GITHUB_OUTPUT
         env:
           GH_TOKEN: ${{ secrets.gh_token }}
+
           
       - name: Update status field for issues in project
         run: |
