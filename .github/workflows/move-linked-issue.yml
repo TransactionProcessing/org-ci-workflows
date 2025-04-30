@@ -81,7 +81,7 @@ jobs:
               }
             }' --paginate
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.gh_token }}
 
       - name: Find the latest matching project v2
         id: project
