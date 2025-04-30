@@ -197,7 +197,7 @@ jobs:
         id: status_option
         run: |
           FIELD_ID=${{ steps.status_field.outputs.field_id }}
-          STATUS_OPTION_NAME="${{ inputs.status_option_name }}"  # e.g., "In Progress"
+          STATUS_OPTION_NAME="${{ inputs.project_column_name }}"  # e.g., "In Progress"
       
           QUERY=$(cat <<EOF
           query {
@@ -233,7 +233,7 @@ jobs:
         run: |
           PROJECT_ID=${{ steps.project.outputs.project_id }}
           FIELD_ID=${{ steps.status_field.outputs.field_id }}
-          OPTION_ID=${{ steps.status_field.outputs.option_id }}
+          OPTION_ID=${{ steps.status_option.outputs.option_id }}
           STATUS_OPTION_NAME="${{ inputs.project_column_name }}"
       
           echo "Setting status field to: $STATUS_OPTION_NAME (Field ID: $FIELD_ID, Option ID: $OPTION_ID)"
