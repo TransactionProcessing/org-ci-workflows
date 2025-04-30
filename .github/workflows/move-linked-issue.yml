@@ -185,6 +185,9 @@ jobs:
           # Send the GraphQL request to fetch project fields and options
           response=$(gh api graphql -f query="$QUERY" -H "Accept: application/vnd.github.v3+json")
       
+          # Debug output to inspect the raw response
+          echo "$response" | jq .
+      
           # Extract the Field ID for "Status"
           FIELD_ID=$(echo "$response" | jq -r '.data.node.fields.nodes[] | select(.name == "'"$FIELD_NAME"'") | .id')
       
