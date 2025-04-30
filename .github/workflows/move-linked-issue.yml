@@ -193,22 +193,19 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.gh_token }}
 
-      - name: Get "In Progress" option ID for "Status" field
+      - name: Get option ID for selected status value
         id: status_option
         run: |
           FIELD_ID=${{ steps.status_field.outputs.field_id }}
-          STATUS_OPTION_NAME="${{ inputs.status_option_name }}"  # Option to set, e.g., "In Progress"
+          STATUS_OPTION_NAME="${{ inputs.status_option_name }}"  # e.g., "In Progress"
       
-          # Fetch options for the "Status" field
           QUERY=$(cat <<EOF
-          {
+          query {
             node(id: "$FIELD_ID") {
-              ... on ProjectV2FieldConfiguration {
-                options(first: 100) {
-                  nodes {
-                    id
-                    name
-                  }
+              ... on ProjectV2SingleSelectField {
+                options {
+                  id
+                  name
                 }
               }
             }
@@ -216,24 +213,18 @@ jobs:
           EOF
           )
       
-          # Send the GraphQL request to fetch options for the "Status" field
-          response=$(gh api graphql -f query="$QUERY" -H "Accept: application/vnd.github.v3+json")
-      
-          # Debug output to inspect the raw response
+          echo "Running GraphQL query for field options..."
+          response=$(gh api graphql -f query="$QUERY")
           echo "$response" | jq .
       
-          # Extract the Option ID for the selected status option (e.g., "In Progress")
-          OPTION_ID=$(echo "$response" | jq -r '.data.node.options.nodes[] | select(.name == "'"$STATUS_OPTION_NAME"'") | .id')
+          OPTION_ID=$(echo "$response" | jq -r '.data.node.options[] | select(.name == "'"$STATUS_OPTION_NAME"'") | .id')
       
-          # Check if the required option ID is found
           if [ -z "$OPTION_ID" ]; then
             echo "Could not find the option ID for '$STATUS_OPTION_NAME'."
             exit 1
           fi
       
           echo "option_id=$OPTION_ID" >> $GITHUB_OUTPUT
-          echo "Successfully retrieved Option ID: $OPTION_ID"
-      
         env:
           GH_TOKEN: ${{ secrets.gh_token }}
 
