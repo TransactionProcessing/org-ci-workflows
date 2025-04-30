@@ -133,9 +133,9 @@ jobs:
                 ... on ProjectV2 {
                   fields(first: 100) {
                     nodes {
+                      __typename
                       id
                       name
-                      dataType
                       ... on ProjectV2SingleSelectField {
                         options {
                           id
