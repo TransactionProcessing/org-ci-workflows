@@ -227,43 +227,32 @@ jobs:
           echo "option_id=$OPTION_ID" >> $GITHUB_OUTPUT
         env:
           GH_TOKEN: ${{ secrets.gh_token }}
-
           
       - name: Set Status field to selected value
         run: |
-          PROJECT_ID=${{ steps.project.outputs.project_id }}
           FIELD_ID=${{ steps.status_field.outputs.field_id }}
           OPTION_ID=${{ steps.status_option.outputs.option_id }}
-          STATUS_OPTION_NAME="${{ inputs.project_column_name }}"
       
-          echo "Setting status field to: $STATUS_OPTION_NAME (Field ID: $FIELD_ID, Option ID: $OPTION_ID)"
+          while IFS=',' read -r issue_number item_id; do
+            echo "Updating status for issue #$issue_number (item_id: $item_id)"
       
-          # Check if the field_id and option_id are present
-          if [ -z "$FIELD_ID" ] || [ -z "$OPTION_ID" ]; then
-            echo "Field ID or Option ID not found."
-            exit 1
-          fi
+            gh api graphql -f query='
+              mutation($itemId:ID!, $fieldId:ID!, $optionId:String!) {
+                updateProjectV2ItemFieldValue(input: {
+                  projectId: "'"${{ steps.project.outputs.project_id }}"'",
+                  itemId: $itemId,
+                  fieldId: $fieldId,
+                  value: {
+                    singleSelectOptionId: $optionId
+                  }
+                }) {
+                  projectV2Item {
+                    id
+                  }
+                }
+              }' -f itemId="$item_id" -f fieldId="$FIELD_ID" -f optionId="$OPTION_ID"
       
-          # GraphQL query to update status field to the selected value
-          QUERY=$(cat <<EOF
-          mutation {
-            updateProjectV2ItemFieldValue(input: {
-              projectId: "$PROJECT_ID"
-              fieldId: "$FIELD_ID"
-              itemId: "$ITEM_ID"  # Assuming ITEM_ID is passed correctly from previous steps
-              value: { id: "$OPTION_ID" }
-            }) {
-              clientMutationId
-            }
-          }
-          EOF
-          )
-      
-          # Send the GraphQL request to set the status
-          response=$(gh api graphql -f query="$QUERY" -H "Accept: application/vnd.github.v3+json")
-      
-          echo "Response: $response"
-      
+          done <<< "${{ steps.get_issues.outputs.issue_list }}"
         env:
           GH_TOKEN: ${{ secrets.gh_token }}
 
