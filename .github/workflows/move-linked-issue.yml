@@ -1,0 +1,162 @@
+name: Move Linked Issue to In Progress
+
+on:
+  workflow_call:
+    inputs:
+      org:
+        required: true
+        type: string
+      field-name:
+        required: false
+        type: string
+        default: Status
+      option-name:
+        required: false
+        type: string
+        default: In Progress
+    secrets:
+      gh_token:
+        required: true
+
+jobs:
+  update_project:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Install jq
+        run: sudo apt-get install jq
+
+      - name: Fetch linked issues
+        id: get_linked_issues
+        run: |
+          echo "Fetching linked issues..."
+          gh api graphql -f query='
+            query {
+              repository(owner: "${{ github.repository_owner }}", name: "${{ github.event.repository.name }}") {
+                pullRequest(number: ${{ github.event.pull_request.number }}) {
+                  closingIssuesReferences(first: 5) {
+                    nodes {
+                      number
+                    }
+                  }
+                }
+              }
+            }' > linked_issues.json
+
+          issue_number=$(jq -r '.data.repository.pullRequest.closingIssuesReferences.nodes[0].number // empty' linked_issues.json)
+          echo "issue_number=$issue_number" >> $GITHUB_OUTPUT
+
+      - name: Skip if no linked issue
+        if: steps.get_linked_issues.outputs.issue_number == ''
+        run: echo "No linked issue found. Skipping."
+
+      - name: Get project, field, option IDs
+        id: get_ids
+        if: steps.get_linked_issues.outputs.issue_number != ''
+        run: |
+          FIELD_NAME="${{ inputs.field-name }}"
+          OPTION_NAME="${{ inputs.option-name }}"
+          ORG="${{ inputs.org }}"
+          CREATED_AT="${{ github.event.pull_request.created_at }}"
+          PROJECT_NAME=$(date -d "$CREATED_AT" +'%B %Y')
+          PROJECT_NAME="${PROJECT_NAME} Sprint"
+          echo "Resolved project name: $PROJECT_NAME"
+
+          gh api graphql -f query='
+            query($org: String!) {
+              organization(login: $org) {
+                projectsV2(first: 20) {
+                  nodes {
+                    id
+                    title
+                  }
+                }
+              }
+            }' -f org="$ORG" > projects.json
+
+          project_id=$(jq -r --arg name "$PROJECT_NAME" '.data.organization.projectsV2.nodes[] | select(.title == $name) | .id' projects.json)
+          echo "project_id=$project_id" >> $GITHUB_OUTPUT
+
+          gh api graphql -f query='
+            query($project: ID!) {
+              node(id: $project) {
+                ... on ProjectV2 {
+                  fields(first: 20) {
+                    nodes {
+                      id
+                      name
+                      ... on ProjectV2SingleSelectField {
+                        options {
+                          id
+                          name
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }' -f project=$project_id > fields.json
+
+          field_id=$(jq -r --arg fname "$FIELD_NAME" '.data.node.fields.nodes[] | select(.name == $fname) | .id' fields.json)
+          option_id=$(jq -r --arg fname "$FIELD_NAME" --arg oname "$OPTION_NAME" '
+            .data.node.fields.nodes[]
+            | select(.name == $fname)
+            | .options[]
+            | select(.name == $oname)
+            | .id
+          ' fields.json)
+
+          echo "field_id=$field_id" >> $GITHUB_OUTPUT
+          echo "option_id=$option_id" >> $GITHUB_OUTPUT
+
+      - name: Get item ID for linked issue
+        id: get_item_id
+        if: steps.get_linked_issues.outputs.issue_number != ''
+        run: |
+          gh api graphql -f query='
+            query($owner: String!, $repo: String!, $number: Int!) {
+              repository(owner: $owner, name: $repo) {
+                issue(number: $number) {
+                  projectItems(first: 10) {
+                    nodes {
+                      id
+                      project {
+                        id
+                      }
+                    }
+                  }
+                }
+              }
+            }' \
+            -f owner="${{ github.repository_owner }}" \
+            -f repo="${{ github.event.repository.name }}" \
+            -f number=${{ steps.get_linked_issues.outputs.issue_number }} > item.json
+
+          item_id=$(jq -r --arg pid "${{ steps.get_ids.outputs.project_id }}" '
+            .data.repository.issue.projectItems.nodes[]
+            | select(.project.id == $pid)
+            | .id' item.json)
+
+          echo "item_id=$item_id" >> $GITHUB_OUTPUT
+
+      - name: Update project field
+        if: steps.get_item_id.outputs.item_id != ''
+        run: |
+          gh api graphql -f query='
+            mutation($project: ID!, $item: ID!, $field: ID!, $option: String!) {
+              updateProjectV2ItemFieldValue(input: {
+                projectId: $project,
+                itemId: $item,
+                fieldId: $field,
+                value: { singleSelectOptionId: $option }
+              }) {
+                projectV2Item {
+                  id
+                }
+              }
+            }' \
+            -f project="${{ steps.get_ids.outputs.project_id }}" \
+            -f item="${{ steps.get_item_id.outputs.item_id }}" \
+            -f field="${{ steps.get_ids.outputs.field_id }}" \
+            -f option="${{ steps.get_ids.outputs.option_id }}"
+        env:
+          GH_TOKEN: ${{ secrets.gh_token }}
