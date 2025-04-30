@@ -18,12 +18,12 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Upgrade GitHub CLI
+      - name: Install latest GitHub CLI
         run: |
-          sudo apt-key adv --keyserver keyserver.ubuntu.com --recv-key C99B11DEB97541F0
-          sudo apt-add-repository https://cli.github.com/packages
-          sudo apt update
-          sudo apt install gh -y
+          curl -sSL https://github.com/cli/cli/releases/latest/download/gh_$(curl -sSL https://api.github.com/repos/cli/cli/releases/latest | jq -r .tag_name | sed 's/^v//')_linux_amd64.tar.gz -o gh.tar.gz
+          tar -xzf gh.tar.gz
+          sudo cp gh_*/bin/gh /usr/local/bin/
+          gh --version
 
       - name: Fetch linked issues
         id: get_linked_issues
