@@ -157,7 +157,7 @@ jobs:
           FIELD_NAME="Status"  # Name of the field you are looking for
           STATUS_OPTION_NAME="${{ inputs.status_option_name }}"  # Option to set, e.g., "In Progress"
       
-          # Fetch the project fields and find the field ID for the "Status" field
+          # Updated GraphQL query to handle union types properly
           QUERY=$(cat <<EOF
           {
             node(id: "$PROJECT_ID") {
@@ -166,10 +166,12 @@ jobs:
                   nodes {
                     id
                     name
-                    options(first: 100) {
-                      nodes {
-                        id
-                        name
+                    ... on ProjectV2FieldConfiguration {
+                      options(first: 100) {
+                        nodes {
+                          id
+                          name
+                        }
                       }
                     }
                   }
