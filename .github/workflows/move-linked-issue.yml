@@ -66,6 +66,25 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.gh_token }}
 
+      - name: List all Projects v2 in the organization
+        run: |
+          gh auth login --with-token
+          gh api graphql -f query='
+            {
+              organization(login: "TransactionProcessing") {
+                projectsV2(first: 100) {
+                  nodes {
+                    id
+                    title
+                    state
+                    url
+                  }
+                }
+              }
+            }' --paginate
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
       - name: Find the latest matching project v2
         id: project
         run: |
