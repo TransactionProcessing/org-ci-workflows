@@ -154,17 +154,22 @@ jobs:
         id: status_field
         run: |
           PROJECT_ID=${{ steps.project.outputs.project_id }}
-          FIELD_NAME="Status"  # Name of the field you are looking for
+          FIELD_NAME="Status"
       
-          # Fetch fields of the project without trying to access the options in this query
           QUERY=$(cat <<EOF
-          {
+          query {
             node(id: "$PROJECT_ID") {
               ... on ProjectV2 {
                 fields(first: 100) {
                   nodes {
-                    id
-                    name
+                    ... on ProjectV2SingleSelectField {
+                      id
+                      name
+                    }
+                    ... on ProjectV2FieldCommon {
+                      id
+                      name
+                    }
                   }
                 }
               }
@@ -173,24 +178,18 @@ jobs:
           EOF
           )
       
-          # Send the GraphQL request to fetch project fields
-          response=$(gh api graphql -f query="$QUERY" -H "Accept: application/vnd.github.v3+json")
-      
-          # Debug output to inspect the raw response
+          echo "Running GraphQL query..."
+          response=$(gh api graphql -f query="$QUERY")
           echo "$response" | jq .
       
-          # Extract the Field ID for "Status"
           FIELD_ID=$(echo "$response" | jq -r '.data.node.fields.nodes[] | select(.name == "'"$FIELD_NAME"'") | .id')
       
-          # Check if the required field ID is found
           if [ -z "$FIELD_ID" ]; then
             echo "Could not find the field ID for '$FIELD_NAME'."
             exit 1
           fi
       
           echo "field_id=$FIELD_ID" >> $GITHUB_OUTPUT
-          echo "Successfully retrieved Field ID: $FIELD_ID"
-      
         env:
           GH_TOKEN: ${{ secrets.gh_token }}
 
