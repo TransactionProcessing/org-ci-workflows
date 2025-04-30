@@ -128,9 +128,9 @@ jobs:
           FIELD_NAME="Status"
           STATUS_OPTION_NAME="${{ inputs.project_column_name }}"
       
-          # Query for the "Status" field ID
+          # Query for the "Status" field ID (ensuring we're getting the correct field)
           FIELD_ID=$(gh api graphql -f query='
-            query($projectId: ID!, $fieldName: String!) {
+            query($projectId: ID!) {
               node(id: $projectId) {
                 ... on ProjectV2 {
                   fields(first: 100) {
@@ -141,16 +141,16 @@ jobs:
                   }
                 }
               }
-            }' -f projectId="$PROJECT_ID" -f fieldName="$FIELD_NAME" | jq -r '.data.node.fields.nodes[] | select(.name == "'"$FIELD_NAME"'") | .id')
+            }' -f projectId="$PROJECT_ID" | jq -r '.data.node.fields.nodes[] | select(.name == "'"$FIELD_NAME"'") | .id')
       
           if [ -z "$FIELD_ID" ]; then
             echo "Could not find the field ID for '$FIELD_NAME'."
             exit 1
           fi
       
-          # Query for the "In Progress" option ID (or the specified column name) for the "Status" field
+          # Query for the "In Progress" option ID for the "Status" field
           OPTION_ID=$(gh api graphql -f query='
-            query($fieldId: ID!, $optionName: String!) {
+            query($fieldId: ID!) {
               node(id: $fieldId) {
                 ... on ProjectV2Field {
                   options(first: 100) {
@@ -161,7 +161,7 @@ jobs:
                   }
                 }
               }
-            }' -f fieldId="$FIELD_ID" -f optionName="$STATUS_OPTION_NAME" | jq -r '.data.node.options.nodes[] | select(.name == "'"$STATUS_OPTION_NAME"'") | .id')
+            }' -f fieldId="$FIELD_ID" | jq -r '.data.node.options.nodes[] | select(.name == "'"$STATUS_OPTION_NAME"'") | .id')
       
           if [ -z "$OPTION_ID" ]; then
             echo "Could not find the option ID for '$STATUS_OPTION_NAME'."
@@ -172,6 +172,7 @@ jobs:
           echo "option_id=$OPTION_ID" >> $GITHUB_OUTPUT
         env:
           GH_TOKEN: ${{ secrets.gh_token }}
+
 
           
       - name: Update status field for issues in project
