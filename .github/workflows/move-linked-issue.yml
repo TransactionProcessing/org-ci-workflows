@@ -63,45 +63,57 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.gh_token }}
 
-      - name: Find the latest matching project
+      - name: Find the latest matching project v2
         id: project
         run: |
           PREFIX="${{ inputs.project_name_prefix }}"
-          gh api orgs/${{ github.repository_owner }}/projects --paginate --jq '.[] | select(.name | startswith("'"$PREFIX"'")) | [.name, .id]' > projects.json
+          gh api orgs/${{ github.repository_owner }}/projects/v2 --paginate --jq '.[] | select(.title | startswith("'"$PREFIX"'")) | [.title, .id]' > projects_v2.json
 
-          jq -r '.[0]' projects.json > latest_project.txt
-          PROJECT_NAME=$(cut -d'"' -f2 latest_project.txt)
-          PROJECT_ID=$(cut -d' ' -f2 latest_project.txt)
+          jq -r '.[0]' projects_v2.json > latest_project_v2.txt
+          PROJECT_NAME=$(cut -d'"' -f2 latest_project_v2.txt)
+          PROJECT_ID=$(cut -d' ' -f2 latest_project_v2.txt)
 
-          echo "Project: $PROJECT_NAME ($PROJECT_ID)"
+          echo "Project v2: $PROJECT_NAME ($PROJECT_ID)"
           echo "project_id=$PROJECT_ID" >> $GITHUB_OUTPUT
         env:
           GH_TOKEN: ${{ secrets.gh_token }}
 
-      - name: Get target column ID
-        id: column
+      - name: Get "Status" field ID and "In Progress" option ID
+        id: status_field
         run: |
           PROJECT_ID=${{ steps.project.outputs.project_id }}
-          COLUMN_NAME="${{ inputs.project_column_name }}"
-          gh api projects/$PROJECT_ID/columns --paginate --jq '.[] | select(.name=="'"$COLUMN_NAME"'") | .id' > column_id.txt
-          COLUMN_ID=$(cat column_id.txt)
+          FIELD_NAME="Status"
+          STATUS_OPTION_NAME="${{ inputs.project_column_name }}"
 
-          if [ -z "$COLUMN_ID" ]; then
-            echo "Column '$COLUMN_NAME' not found!"
+          # Get field ID for "Status" field
+          gh api projects/v2/fields --paginate --jq '.[] | select(.name == "'"$FIELD_NAME"'") | .id' > field_id.txt
+          FIELD_ID=$(cat field_id.txt)
+
+          # Get option ID for "In Progress" (or specified column name)
+          gh api projects/v2/fields/$FIELD_ID/options --paginate --jq '.[] | select(.name == "'"$STATUS_OPTION_NAME"'") | .id' > option_id.txt
+          OPTION_ID=$(cat option_id.txt)
+
+          if [ -z "$FIELD_ID" ] || [ -z "$OPTION_ID" ]; then
+            echo "Could not find field or option IDs."
             exit 1
           fi
 
-          echo "column_id=$COLUMN_ID" >> $GITHUB_OUTPUT
-        env:
-          GH_TOKEN: ${{ secrets.gh_token }}
+          echo "field_id=$FIELD_ID" >> $GITHUB_OUTPUT
+          echo "option_id=$OPTION_ID" >> $GITHUB_OUTPUT
 
-      - name: Move issues to column
+      - name: Move issues to project and set status
         run: |
-          COLUMN_ID=${{ steps.column.outputs.column_id }}
+          PROJECT_ID=${{ steps.project.outputs.project_id }}
+          FIELD_ID=${{ steps.status_field.outputs.field_id }}
+          OPTION_ID=${{ steps.status_field.outputs.option_id }}
 
           while IFS=',' read -r issue_number issue_id; do
-            echo "Moving issue #$issue_number to column $COLUMN_ID"
-            gh api projects/columns/$COLUMN_ID/cards -f content_id="$issue_id" -f content_type="Issue"
+            echo "Adding issue #$issue_number to project $PROJECT_ID and setting status to $OPTION_ID"
+            # Add issue to project
+            gh api projects/v2/items --paginate -X POST -f project_id="$PROJECT_ID" -f content_id="$issue_id" -f content_type="Issue"
+
+            # Set the "Status" field to "In Progress"
+            gh api projects/v2/items --paginate -X PATCH -f item_id="$issue_id" -f field_id="$FIELD_ID" -f value_id="$OPTION_ID"
           done <<< "${{ steps.get_issues.outputs.issue_list }}"
         env:
           GH_TOKEN: ${{ secrets.gh_token }}
