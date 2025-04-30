@@ -149,6 +149,59 @@ jobs:
             }' -f projectId="$PROJECT_ID" | jq .
         env:
           GH_TOKEN: ${{ secrets.gh_token }}
+
+      - name: Get "Status" field ID and "In Progress" option ID
+        id: status_field
+        run: |
+          PROJECT_ID=${{ steps.project.outputs.project_id }}
+          FIELD_NAME="Status"  # Name of the field you are looking for
+          STATUS_OPTION_NAME="${{ inputs.status_option_name }}"  # Option to set, e.g., "In Progress"
+      
+          # Fetch the project fields and find the field ID for the "Status" field
+          QUERY=$(cat <<EOF
+          {
+            node(id: "$PROJECT_ID") {
+              ... on ProjectV2 {
+                fields(first: 100) {
+                  nodes {
+                    id
+                    name
+                    options(first: 100) {
+                      nodes {
+                        id
+                        name
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+          EOF
+          )
+      
+          # Send the GraphQL request to fetch project fields and options
+          response=$(gh api graphql -f query="$QUERY" -H "Accept: application/vnd.github.v3+json")
+      
+          # Extract the Field ID for "Status"
+          FIELD_ID=$(echo "$response" | jq -r '.data.node.fields.nodes[] | select(.name == "'"$FIELD_NAME"'") | .id')
+      
+          # Extract the Option ID for the selected status option (e.g., "In Progress")
+          OPTION_ID=$(echo "$response" | jq -r '.data.node.fields.nodes[] | select(.name == "'"$FIELD_NAME"'") | .options.nodes[] | select(.name == "'"$STATUS_OPTION_NAME"'") | .id')
+      
+          # Check if the required values are found
+          if [ -z "$FIELD_ID" ] || [ -z "$OPTION_ID" ]; then
+            echo "Could not find the required field or option IDs."
+            exit 1
+          fi
+      
+          echo "field_id=$FIELD_ID" >> $GITHUB_OUTPUT
+          echo "option_id=$OPTION_ID" >> $GITHUB_OUTPUT
+      
+          echo "Successfully retrieved Field ID: $FIELD_ID and Option ID: $OPTION_ID"
+      
+        env:
+          GH_TOKEN: ${{ secrets.gh_token }}
           
       - name: Set Status field to selected value
         run: |
