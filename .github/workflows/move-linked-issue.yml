@@ -68,7 +68,6 @@ jobs:
 
       - name: List all Projects v2 in the organization
         run: |
-          gh auth login --with-token
           gh api graphql -f query='
             {
               organization(login: "TransactionProcessing") {
