@@ -127,20 +127,42 @@ jobs:
           PROJECT_ID=${{ steps.project.outputs.project_id }}
           FIELD_NAME="Status"
           STATUS_OPTION_NAME="${{ inputs.project_column_name }}"
-
-          # Get field ID for "Status" field
-          gh api projects/v2/fields --paginate --jq '.[] | select(.name == "'"$FIELD_NAME"'") | .id' > field_id.txt
-          FIELD_ID=$(cat field_id.txt)
-
-          # Get option ID for "In Progress" (or specified column name)
-          gh api projects/v2/fields/$FIELD_ID/options --paginate --jq '.[] | select(.name == "'"$STATUS_OPTION_NAME"'") | .id' > option_id.txt
-          OPTION_ID=$(cat option_id.txt)
-
+      
+          # Query for the "Status" field ID
+          FIELD_ID=$(gh api graphql -f query='
+            query($projectId: ID!, $fieldName: String!) {
+              node(id: $projectId) {
+                ... on ProjectV2 {
+                  fields(first: 100) {
+                    nodes {
+                      id
+                      name
+                    }
+                  }
+                }
+              }
+            }' -f projectId="$PROJECT_ID" -f fieldName="$FIELD_NAME" | jq -r '.data.node.fields.nodes[] | select(.name == "'"$FIELD_NAME"'") | .id')
+      
+          # Query for the "In Progress" option ID (or the specified column name)
+          OPTION_ID=$(gh api graphql -f query='
+            query($fieldId: ID!, $optionName: String!) {
+              node(id: $fieldId) {
+                ... on ProjectV2Field {
+                  options(first: 100) {
+                    nodes {
+                      id
+                      name
+                    }
+                  }
+                }
+              }
+            }' -f fieldId="$FIELD_ID" -f optionName="$STATUS_OPTION_NAME" | jq -r '.data.node.options.nodes[] | select(.name == "'"$STATUS_OPTION_NAME"'") | .id')
+      
           if [ -z "$FIELD_ID" ] || [ -z "$OPTION_ID" ]; then
             echo "Could not find field or option IDs."
             exit 1
           fi
-
+      
           echo "field_id=$FIELD_ID" >> $GITHUB_OUTPUT
           echo "option_id=$OPTION_ID" >> $GITHUB_OUTPUT
         env:
