@@ -25,15 +25,30 @@ jobs:
           sudo cp gh_*/bin/gh /usr/local/bin/
           gh --version
 
-      - name: Fetch linked issues
+      - name: Fetch linked issues via GraphQL
         id: get_linked_issues
         run: |
-          echo "Fetching linked issues..."
-          ISSUE_NUMBERS=$(gh pr view ${{ github.event.pull_request.number }} --json linkedIssues -q ".linkedIssues[].number" || echo "")
-          
-          #echo "issue_numbers=${ISSUE_NUMBERS}" >> $GITHUB_OUTPUT
+            echo "Fetching linked issues using GraphQL..."
+            PR_ID=$(gh pr view ${{ github.event.pull_request.number }} --json id -q .id)
+            
+            QUERY='
+            query($id: ID!) {
+              node(id: $id) {
+                ... on PullRequest {
+                  closingIssuesReferences(first: 10) {
+                    nodes {
+                      number
+                    }
+                  }
+                }
+              }
+            }'
+            
+            ISSUE_NUMBERS=$(gh api graphql -f id="$PR_ID" -f query="$QUERY" --jq '.data.node.closingIssuesReferences.nodes[].number')
+            echo "issue_numbers=${ISSUE_NUMBERS}" >> $GITHUB_OUTPUT
         env:
-          GH_TOKEN: ${{ secrets.gh_token }}
+            GH_TOKEN: ${{ secrets.gh_token }}
+
 
       - name: Skip if no linked issues
         if: steps.get_linked_issues.outputs.issue_numbers == ''
