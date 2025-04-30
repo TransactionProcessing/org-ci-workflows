@@ -22,8 +22,9 @@ jobs:
         id: get_linked_issues
         run: |
           echo "Fetching linked issues..."
-          ISSUE_NUMBERS=$(gh pr view ${{ github.event.pull_request.number }} --json closingIssuesReferences -q ".closingIssuesReferences[].number" || echo "")
-          echo "issue_numbers=${ISSUE_NUMBERS}" >> $GITHUB_OUTPUT
+          ISSUE_NUMBERS=$(gh pr view ${{ github.event.pull_request.number }} --json linkedIssues -q ".linkedIssues[].number" || echo "")
+          
+          #echo "issue_numbers=${ISSUE_NUMBERS}" >> $GITHUB_OUTPUT
         env:
           GH_TOKEN: ${{ secrets.gh_token }}
 
