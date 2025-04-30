@@ -87,12 +87,35 @@ jobs:
         id: project
         run: |
           PREFIX="${{ inputs.project_name_prefix }}"
-          gh api orgs/${{ github.repository_owner }}/projects/v2 --paginate --jq '.[] | select(.title | startswith("'"$PREFIX"'")) | [.title, .id]' > projects_v2.json
-
-          jq -r '.[0]' projects_v2.json > latest_project_v2.txt
-          PROJECT_NAME=$(cut -d'"' -f2 latest_project_v2.txt)
-          PROJECT_ID=$(cut -d' ' -f2 latest_project_v2.txt)
-
+      
+          # Query all org projects v2
+          gh api graphql -f query='
+            {
+              organization(login: "TransactionProcessing") {
+                projectsV2(first: 100) {
+                  nodes {
+                    id
+                    title
+                    url
+                    createdAt
+                  }
+                }
+              }
+            }' > all_projects.json
+      
+          # Filter projects matching prefix and sort by creation date descending
+          jq --arg prefix "$PREFIX" '
+            .data.organization.projectsV2.nodes
+            | map(select(.title | startswith($prefix)))
+            | sort_by(.createdAt)
+            | reverse
+            | .[0] 
+            | { title, id }
+          ' all_projects.json > latest_project.json
+      
+          PROJECT_NAME=$(jq -r '.title' latest_project.json)
+          PROJECT_ID=$(jq -r '.id' latest_project.json)
+      
           echo "Project v2: $PROJECT_NAME ($PROJECT_ID)"
           echo "project_id=$PROJECT_ID" >> $GITHUB_OUTPUT
         env:
