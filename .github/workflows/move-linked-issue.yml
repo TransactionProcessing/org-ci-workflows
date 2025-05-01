@@ -194,18 +194,19 @@ jobs:
                     singleSelectOptionId: $optionId
                   }
                 }
-              }' > input.json
+              }' > variables.json
       
             gh api graphql \
-              --input input.json \
-              -f query='
+              --raw-field query='
                 mutation($input: UpdateProjectV2ItemFieldValueInput!) {
                   updateProjectV2ItemFieldValue(input: $input) {
                     projectV2Item {
                       id
                     }
                   }
-                }'
+                }
+              ' \
+              --input variables.json
           done < item_ids.csv
         env:
           GH_TOKEN: ${{ secrets.gh_token }}
