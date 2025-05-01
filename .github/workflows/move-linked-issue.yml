@@ -171,13 +171,28 @@ jobs:
 
       - name: Set Status field to selected value
         run: |
-          FIELD_ID=${{ steps.status_field.outputs.field_id }}
-          OPTION_ID=${{ steps.status_field.outputs.option_id }}
+          FIELD_ID="${{ steps.status_field.outputs.field_id }}"
+          OPTION_ID="${{ steps.status_field.outputs.option_id }}"
+          PROJECT_ID="${{ steps.project.outputs.project_id }}"
       
           echo "🔄 Updating status field for project items..."
       
           while IFS=',' read -r ISSUE_ID ITEM_ID; do
             echo "🔧 Updating item $ITEM_ID (Issue ID: $ISSUE_ID)..."
+      
+            JSON_PAYLOAD=$(jq -n \
+              --arg projectId "$PROJECT_ID" \
+              --arg itemId "$ITEM_ID" \
+              --arg fieldId "$FIELD_ID" \
+              --arg optionId "$OPTION_ID" \
+              '{
+                projectId: $projectId,
+                itemId: $itemId,
+                fieldId: $fieldId,
+                value: {
+                  singleSelectOptionId: $optionId
+                }
+              }')
       
             gh api graphql -f query='
               mutation($input: UpdateProjectV2ItemFieldValueInput!) {
@@ -186,11 +201,8 @@ jobs:
                     id
                   }
                 }
-              }' -f input="$(jq -n \
-                --arg itemId "$ITEM_ID" \
-                --arg fieldId "$FIELD_ID" \
-                --arg optionId "$OPTION_ID" \
-                '{projectId: ${{ steps.project.outputs.project_id }}, itemId: $itemId, fieldId: $fieldId, value: { singleSelectOptionId: $optionId }}')"
+              }' -f input="$JSON_PAYLOAD"
           done < item_ids.csv
         env:
           GH_TOKEN: ${{ secrets.gh_token }}
+
