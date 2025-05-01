@@ -169,24 +169,28 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.gh_token }}
 
-
       - name: Set Status field to selected value
         run: |
           FIELD_ID=${{ steps.status_field.outputs.field_id }}
           OPTION_ID=${{ steps.status_field.outputs.option_id }}
-          PROJECT_ID=${{ steps.project.outputs.project_id }}
-
-          while IFS='=' read -r ISSUE_NUM ITEM_ID; do
-            echo "Setting status for issue #$ISSUE_NUM (item_id: $ITEM_ID)"
-
-            gh api graphql -f query='mutation($input: UpdateProjectV2ItemFieldValueInput!) {
-              updateProjectV2ItemFieldValue(input: $input) {
-                projectV2Item {
-                  id
+      
+          echo "🔄 Updating status field for project items..."
+      
+          while IFS=',' read -r ISSUE_ID ITEM_ID; do
+            echo "🔧 Updating item $ITEM_ID (Issue ID: $ISSUE_ID)..."
+      
+            gh api graphql -f query='
+              mutation($input: UpdateProjectV2ItemFieldValueInput!) {
+                updateProjectV2ItemFieldValue(input: $input) {
+                  projectV2Item {
+                    id
+                  }
                 }
-              }
-            }' -f input="{\"projectId\":\"$PROJECT_ID\",\"itemId\":\"$ITEM_ID\",\"fieldId\":\"$FIELD_ID\",\"value\":{\"singleSelectOptionId\":\"$OPTION_ID\"}}"
-
-          done < issue_items.env
+              }' -f input="$(jq -n \
+                --arg itemId "$ITEM_ID" \
+                --arg fieldId "$FIELD_ID" \
+                --arg optionId "$OPTION_ID" \
+                '{projectId: ${{ steps.project.outputs.project_id }}, itemId: $itemId, fieldId: $fieldId, value: { singleSelectOptionId: $optionId }}')"
+          done < item_ids.csv
         env:
           GH_TOKEN: ${{ secrets.gh_token }}
