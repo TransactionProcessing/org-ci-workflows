@@ -180,33 +180,21 @@ jobs:
           while IFS=',' read -r ISSUE_ID ITEM_ID; do
             echo "🔧 Updating item $ITEM_ID (Issue ID: $ISSUE_ID)..."
       
-            jq -n \
-              --arg projectId "$PROJECT_ID" \
-              --arg itemId "$ITEM_ID" \
-              --arg fieldId "$FIELD_ID" \
-              --arg optionId "$OPTION_ID" \
-              '{
-                input: {
-                  projectId: $projectId,
-                  itemId: $itemId,
-                  fieldId: $fieldId,
+            gh api graphql -f query="
+              mutation {
+                updateProjectV2ItemFieldValue(input: {
+                  projectId: \"$PROJECT_ID\",
+                  itemId: \"$ITEM_ID\",
+                  fieldId: \"$FIELD_ID\",
                   value: {
-                    singleSelectOptionId: $optionId
+                    singleSelectOptionId: \"$OPTION_ID\"
+                  }
+                }) {
+                  projectV2Item {
+                    id
                   }
                 }
-              }' > variables.json
-      
-            gh api graphql \
-              --raw-field query='
-                mutation($input: UpdateProjectV2ItemFieldValueInput!) {
-                  updateProjectV2ItemFieldValue(input: $input) {
-                    projectV2Item {
-                      id
-                    }
-                  }
-                }
-              ' \
-              --input variables.json
+              }"
           done < item_ids.csv
         env:
           GH_TOKEN: ${{ secrets.gh_token }}
