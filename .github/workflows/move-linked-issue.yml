@@ -107,74 +107,68 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.gh_token }}
 
-      - name: Map issues to project item IDs
-        id: map_items
+      - name: Map issues to project item IDs (paginated)
+        id: map_issues
         run: |
-                PROJECT_ID=${{ steps.project.outputs.project_id }}
-                echo "item_ids=" >> $GITHUB_OUTPUT
-                > item_ids.txt
+          PROJECT_ID=${{ steps.project.outputs.project_id }}
+          ISSUE_IDS=$(cut -d',' -f2 < issues.csv)
       
-                while IFS=',' read -r ISSUE_NUMBER ISSUE_NODE_ID; do
-                  echo "🔍 Mapping issue #$ISSUE_NUMBER"
-                  HAS_NEXT_PAGE=true
-                  END_CURSOR=""
+          echo "🔄 Mapping issues to project items using pagination..."
       
-                  while [ "$HAS_NEXT_PAGE" = "true" ]; do
-                    if [ -n "$END_CURSOR" ]; then
-                      PAGINATION=", after: \\\"$END_CURSOR\\\""
-                    else
-                      PAGINATION=""
-                    fi
+          > item_ids.csv
       
-                    read -r -d '' QUERY <<GRAPHQL
-                    query {
-                      node(id: "$PROJECT_ID") {
-                        ... on ProjectV2 {
-                          items(first: 100$PAGINATION) {
-                            nodes {
-                              id
-                              content {
-                                ... on Issue {
-                                  id
-                                  number
-                                }
-                              }
-                            }
-                            pageInfo {
-                              hasNextPage
-                              endCursor
-                            }
-                          }
+          END_CURSOR=""
+          HAS_NEXT_PAGE=true
+      
+          while [ "$HAS_NEXT_PAGE" = true ]; do
+            if [ -z "$END_CURSOR" ]; then
+              PAGINATION=""
+            else
+              PAGINATION=", after: \"$END_CURSOR\""
+            fi
+      
+            GRAPHQL_QUERY=$(cat <<EOF
+            query {
+              node(id: "$PROJECT_ID") {
+                ... on ProjectV2 {
+                  items(first: 100$PAGINATION) {
+                    nodes {
+                      id
+                      content {
+                        ... on Issue {
+                          id
+                          number
                         }
                       }
                     }
-                    GRAPHQL
+                    pageInfo {
+                      endCursor
+                      hasNextPage
+                    }
+                  }
+                }
+              }
+            }
+      EOF
+            )
       
-                    RESPONSE=$(gh api graphql -f query="$QUERY")
-                    echo "$RESPONSE" > items.json
+            RESPONSE=$(gh api graphql -f query="$GRAPHQL_QUERY")
       
-                    if jq -e '.data.node.items.nodes' items.json > /dev/null; then
-                      MATCHED_ITEM_ID=$(jq -r --arg ISSUE_NODE_ID "$ISSUE_NODE_ID" '
-                        .data.node.items.nodes[]
-                        | select(.content.id == $ISSUE_NODE_ID)
-                        | .id' items.json)
+            echo "$RESPONSE" | jq -c '.data.node.items.nodes[]' | while read -r item; do
+              ISSUE_ID=$(echo "$item" | jq -r '.content.id')
+              ITEM_ID=$(echo "$item" | jq -r '.id')
       
-                      if [ -n "$MATCHED_ITEM_ID" ]; then
-                        echo "✅ Found item ID: $MATCHED_ITEM_ID for issue $ISSUE_NUMBER"
-                        echo "$MATCHED_ITEM_ID" >> item_ids.txt
-                      fi
-                    else
-                      echo "⚠️ No items found for project."
-                    fi
+              if echo "$ISSUE_IDS" | grep -q "$ISSUE_ID"; then
+                echo "$ISSUE_ID,$ITEM_ID" >> item_ids.csv
+              fi
+            done
       
-                    HAS_NEXT_PAGE=$(jq -r '.data.node.items.pageInfo.hasNextPage' items.json)
-                    END_CURSOR=$(jq -r '.data.node.items.pageInfo.endCursor' items.json)
-                  done
-                done < issues.csv
+            HAS_NEXT_PAGE=$(echo "$RESPONSE" | jq -r '.data.node.items.pageInfo.hasNextPage')
+            END_CURSOR=$(echo "$RESPONSE" | jq -r '.data.node.items.pageInfo.endCursor')
+          done
       
-                echo "item_ids<<EOF" >> $GITHUB_OUTPUT
-                cat item_ids.txt >> $GITHUB_OUTPUT
-                echo "EOF" >> $GITHUB_OUTPUT
+          echo "🧩 Mapped issues to project items:"
+          cat item_ids.csv
         env:
           GH_TOKEN: ${{ secrets.gh_token }}
 
