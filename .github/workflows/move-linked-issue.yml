@@ -124,14 +124,13 @@ jobs:
             if [ -z "$END_CURSOR" ]; then
               PAGINATION=""
             else
-              PAGINATION=", after: \"$END_CURSOR\""
+              PAGINATION=", after: \\\"$END_CURSOR\\\""
             fi
       
-            GRAPHQL_QUERY=$(cat <<EOF
-            query {
-              node(id: "$PROJECT_ID") {
+            echo 'query {
+              node(id: "'"$PROJECT_ID"'") {
                 ... on ProjectV2 {
-                  items(first: 100$PAGINATION) {
+                  items(first: 100'"$PAGINATION"') {
                     nodes {
                       id
                       content {
@@ -148,11 +147,9 @@ jobs:
                   }
                 }
               }
-            }
-      EOF
-            )
+            }' > query.graphql
       
-            RESPONSE=$(gh api graphql -f query="$GRAPHQL_QUERY")
+            RESPONSE=$(gh api graphql -F query="$(cat query.graphql)")
       
             echo "$RESPONSE" | jq -c '.data.node.items.nodes[]' | while read -r item; do
               ISSUE_ID=$(echo "$item" | jq -r '.content.id')
@@ -171,6 +168,7 @@ jobs:
           cat item_ids.csv
         env:
           GH_TOKEN: ${{ secrets.gh_token }}
+
 
       - name: Set Status field to selected value
         run: |
