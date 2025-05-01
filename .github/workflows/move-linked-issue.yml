@@ -10,8 +10,7 @@ on:
         required: true
         type: string
       project_name_prefix:
-        required: false
-        default: ''
+        required: true
         type: string
     secrets:
       gh_token:
