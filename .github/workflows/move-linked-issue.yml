@@ -175,8 +175,8 @@ jobs:
                 echo "item_ids<<EOF" >> $GITHUB_OUTPUT
                 cat item_ids.txt >> $GITHUB_OUTPUT
                 echo "EOF" >> $GITHUB_OUTPUT
-              env:
-                GH_TOKEN: ${{ secrets.gh_token }}
+        env:
+          GH_TOKEN: ${{ secrets.gh_token }}
 
       - name: Set Status field to selected value
         run: |
