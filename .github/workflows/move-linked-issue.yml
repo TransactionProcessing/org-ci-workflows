@@ -111,27 +111,72 @@ jobs:
         id: map_items
         run: |
           PROJECT_ID=${{ steps.project.outputs.project_id }}
-          declare -A ITEM_IDS
+          echo "item_ids=" >> $GITHUB_OUTPUT
+          > item_ids.txt
 
-          while IFS="," read -r ISSUE_NUM ISSUE_NODE_ID; do
-            ITEM_ID=$(gh api graphql -f query='query($projectId: ID!, $contentId: ID!) {
-              node(id: $projectId) {
-                ... on ProjectV2 {
-                  items(first: 100) {
-                    nodes {
-                      id content { ... on Issue { id number } }
+          while IFS=',' read -r ISSUE_NUMBER ISSUE_NODE_ID; do
+            echo "🔍 Mapping issue #$ISSUE_NUMBER"
+            HAS_NEXT_PAGE=true
+            END_CURSOR=""
+
+            while [ "$HAS_NEXT_PAGE" = "true" ]; do
+              if [ -n "$END_CURSOR" ]; then
+                PAGINATION=", after: \\\"$END_CURSOR\\\""
+              else
+                PAGINATION=""
+              fi
+
+              QUERY=$(cat <<EOF
+              query {
+                node(id: "$PROJECT_ID") {
+                  ... on ProjectV2 {
+                    items(first: 100$PAGINATION) {
+                      nodes {
+                        id
+                        content {
+                          ... on Issue {
+                            id
+                            number
+                          }
+                        }
+                      }
+                      pageInfo {
+                        hasNextPage
+                        endCursor
+                      }
                     }
                   }
                 }
               }
-            }' -f projectId="$PROJECT_ID" -f contentId="$ISSUE_NODE_ID" | jq -r ".data.node.items.nodes[] | select(.content.id == \"$ISSUE_NODE_ID\") | .id")
+              EOF
+          )
 
-            if [ -n "$ITEM_ID" ]; then
-              echo "$ISSUE_NUM=$ITEM_ID" >> issue_items.env
-            fi
-          done <<< "${{ steps.get_issues.outputs.issue_list }}"
+              RESPONSE=$(gh api graphql -f query="$QUERY")
+              echo "$RESPONSE" > items.json
 
-          cat issue_items.env
+              # Check if items exist
+              if jq -e '.data.node.items.nodes' items.json > /dev/null; then
+                MATCHED_ITEM_ID=$(jq -r --arg ISSUE_NODE_ID "$ISSUE_NODE_ID" '
+                  .data.node.items.nodes[]
+                  | select(.content.id == $ISSUE_NODE_ID)
+                  | .id' items.json)
+
+                if [ -n "$MATCHED_ITEM_ID" ]; then
+                  echo "✅ Found item ID: $MATCHED_ITEM_ID for issue $ISSUE_NUMBER"
+                  echo "$MATCHED_ITEM_ID" >> item_ids.txt
+                fi
+              else
+                echo "⚠️ No items found for project."
+              fi
+
+              HAS_NEXT_PAGE=$(jq -r '.data.node.items.pageInfo.hasNextPage' items.json)
+              END_CURSOR=$(jq -r '.data.node.items.pageInfo.endCursor' items.json)
+            done
+          done < issues.csv
+
+          echo "item_ids<<EOF" >> $GITHUB_OUTPUT
+          cat item_ids.txt >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
         env:
           GH_TOKEN: ${{ secrets.gh_token }}
 
