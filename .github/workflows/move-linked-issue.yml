@@ -126,11 +126,11 @@ jobs:
                 PAGINATION=""
               fi
 
-              QUERY=$(cat <<EOF
+              QUERY=$(cat <<'GRAPHQL'
               query {
-                node(id: "$PROJECT_ID") {
+                node(id: "REPLACE_PROJECT_ID") {
                   ... on ProjectV2 {
-                    items(first: 100$PAGINATION) {
+                    items(first: 100REPLACE_PAGINATION) {
                       nodes {
                         id
                         content {
@@ -148,13 +148,16 @@ jobs:
                   }
                 }
               }
-              EOF
-          )
+              GRAPHQL
+              )
+
+              # Replace placeholders with actual values
+              QUERY=${QUERY//REPLACE_PROJECT_ID/$PROJECT_ID}
+              QUERY=${QUERY//REPLACE_PAGINATION/$PAGINATION}
 
               RESPONSE=$(gh api graphql -f query="$QUERY")
               echo "$RESPONSE" > items.json
 
-              # Check if items exist
               if jq -e '.data.node.items.nodes' items.json > /dev/null; then
                 MATCHED_ITEM_ID=$(jq -r --arg ISSUE_NODE_ID "$ISSUE_NODE_ID" '
                   .data.node.items.nodes[]
