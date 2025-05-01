@@ -193,43 +193,72 @@ jobs:
           GH_TOKEN: ${{ secrets.gh_token }}
       
       - name: Map issues to project item IDs
-        id: project_items
+        id: map_issues
         run: |
           PROJECT_ID=${{ steps.project.outputs.project_id }}
-          echo "issue_item_map=" >> $GITHUB_OUTPUT
+          ISSUE_LIST="${{ steps.get_issues.outputs.issue_list }}"
+          echo "$ISSUE_LIST" > issues.csv
       
-          map=""
-          while IFS=',' read -r issue_number issue_node_id; do
-            echo "🔍 Fetching project item for issue #$issue_number ($issue_node_id)"
-            project_item_id=$(gh api graphql -f query='
-              query($projectId:ID!, $contentId:ID!) {
-                projectV2ItemByContent(projectId: $projectId, contentId: $contentId) {
-                  id
+          echo "issue_number,item_id" > project_items.csv
+      
+          # Fetch all project items with content (issues), paginated
+          endCursor=""
+          hasNextPage=true
+      
+          while [ "$hasNextPage" = true ]; do
+            QUERY=$(cat <<EOF
+              query {
+                node(id: "$PROJECT_ID") {
+                  ... on ProjectV2 {
+                    items(first: 100, after: $endCursor) {
+                      pageInfo {
+                        endCursor
+                        hasNextPage
+                      }
+                      nodes {
+                        id
+                        content {
+                          ... on Issue {
+                            number
+                          }
+                        }
+                      }
+                    }
+                  }
                 }
-              }' -f projectId="$PROJECT_ID" -f contentId="$issue_node_id" --jq '.data.projectV2ItemByContent.id')
+              }
+      EOF
+            )
       
-            if [ -n "$project_item_id" ]; then
-              map+="$issue_number,$project_item_id"$'\n'
-            else
-              echo "⚠️ No project item found for issue #$issue_number"
+            RESULT=$(gh api graphql -f query="$QUERY")
+      
+            echo "$RESULT" | jq -r '.data.node.items.nodes[] | select(.content.number != null) | "\(.content.number),\(.id)"' >> project_items.csv
+      
+            hasNextPage=$(echo "$RESULT" | jq -r '.data.node.items.pageInfo.hasNextPage')
+            endCursorVal=$(echo "$RESULT" | jq -r '.data.node.items.pageInfo.endCursor')
+      
+            if [ "$endCursorVal" = "null" ]; then
+              break
             fi
-          done <<< "${{ steps.get_issues.outputs.issue_list }}"
       
-          echo "${map}" > project_items.csv
-          echo "issue_item_map<<EOF" >> $GITHUB_OUTPUT
-          echo "${map}" >> $GITHUB_OUTPUT
-          echo "EOF" >> $GITHUB_OUTPUT
+            endCursor="\"$endCursorVal\""
+          done
+      
+          echo "Mapped items:"
+          cat project_items.csv
         env:
           GH_TOKEN: ${{ secrets.gh_token }}
-      
-      - name: Set Status field to selected value
+
+      - name: Set status field for each issue in project
         run: |
           FIELD_ID=${{ steps.status_field.outputs.field_id }}
           OPTION_ID=${{ steps.status_field.outputs.option_id }}
           PROJECT_ID=${{ steps.project.outputs.project_id }}
       
-          while IFS=',' read -r issue_number project_item_id; do
-            echo "🚀 Setting status for issue #$issue_number (project item: $project_item_id)"
+          while IFS=',' read -r issue_number item_id; do
+            if [ "$issue_number" = "issue_number" ]; then continue; fi
+      
+            echo "Updating status for issue #$issue_number (item_id: $item_id)"
       
             gh api graphql -f query='
               mutation($projectId:ID!, $itemId:ID!, $fieldId:ID!, $optionId:String!) {
@@ -237,16 +266,20 @@ jobs:
                   projectId: $projectId,
                   itemId: $itemId,
                   fieldId: $fieldId,
-                  value: { singleSelectOptionId: $optionId }
+                  value: {
+                    singleSelectOptionId: $optionId
+                  }
                 }) {
-                  projectV2Item { id }
+                  projectV2Item {
+                    id
+                  }
                 }
               }' \
               -f projectId="$PROJECT_ID" \
-              -f itemId="$project_item_id" \
+              -f itemId="$item_id" \
               -f fieldId="$FIELD_ID" \
               -f optionId="$OPTION_ID"
       
-          done <<< "${{ steps.project_items.outputs.issue_item_map }}"
+          done < project_items.csv
         env:
           GH_TOKEN: ${{ secrets.gh_token }}
