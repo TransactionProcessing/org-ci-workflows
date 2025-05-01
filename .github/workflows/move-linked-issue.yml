@@ -24,7 +24,7 @@ jobs:
     steps:
       - name: Checkout the repository
         uses: actions/checkout@v2
-        
+
       - name: Install GitHub CLI
         run: |
           curl -sSL https://github.com/cli/cli/releases/latest/download/gh_$(curl -sSL https://api.github.com/repos/cli/cli/releases/latest | jq -r .tag_name | sed 's/^v//')_linux_amd64.tar.gz -o gh.tar.gz
@@ -42,20 +42,7 @@ jobs:
         run: |
           PR_ID=$(gh pr view ${{ inputs.pr_number }} --json id -q .id)
 
-          QUERY='
-          query($id: ID!) {
-            node(id: $id) {
-              ... on PullRequest {
-                closingIssuesReferences(first: 10) {
-                  nodes {
-                    number
-                    id
-                  }
-                }
-              }
-            }
-          }'
-
+          QUERY='query($id: ID!) { node(id: $id) { ... on PullRequest { closingIssuesReferences(first: 10) { nodes { number id } } } } }'
           gh api graphql -f id="$PR_ID" -f query="$QUERY" > pr_issues.json
 
           jq -r '.data.node.closingIssuesReferences.nodes[] | "\(.number),\(.id)"' pr_issues.json > issues.csv
@@ -66,90 +53,25 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.gh_token }}
 
-      - name: List all Projects v2 in the organization
-        run: |
-          gh api graphql -f query='
-            {
-              organization(login: "TransactionProcessing") {
-                projectsV2(first: 100) {
-                  nodes {
-                    id
-                    title                  
-                    url
-                  }
-                }
-              }
-            }' --paginate
-        env:
-          GH_TOKEN: ${{ secrets.gh_token }}
-
       - name: Find the latest matching project v2
         id: project
         run: |
           PREFIX="${{ inputs.project_name_prefix }}"
-      
-          # Query all org projects v2
-          gh api graphql -f query='
-            {
-              organization(login: "TransactionProcessing") {
-                projectsV2(first: 100) {
-                  nodes {
-                    id
-                    title
-                    url
-                    createdAt
-                  }
+          gh api graphql -f query='{
+            organization(login: "TransactionProcessing") {
+              projectsV2(first: 100) {
+                nodes {
+                  id title url createdAt
                 }
               }
-            }' > all_projects.json
-      
-          # Filter projects matching prefix and sort by creation date descending
-          jq --arg prefix "$PREFIX" '
-            .data.organization.projectsV2.nodes
-            | map(select(.title | startswith($prefix)))
-            | sort_by(.createdAt)
-            | reverse
-            | .[0] 
-            | { title, id }
-          ' all_projects.json > latest_project.json
-      
-          PROJECT_NAME=$(jq -r '.title' latest_project.json)
-          PROJECT_ID=$(jq -r '.id' latest_project.json)
-      
-          echo "Project v2: $PROJECT_NAME ($PROJECT_ID)"
-          echo "project_id=$PROJECT_ID" >> $GITHUB_OUTPUT
+            }
+          }' > all_projects.json
+
+          jq --arg prefix "$PREFIX" '.data.organization.projectsV2.nodes | map(select(.title | startswith($prefix))) | sort_by(.createdAt) | reverse | .[0] | { title, id }' all_projects.json > latest_project.json
+
+          echo "project_id=$(jq -r '.id' latest_project.json)" >> $GITHUB_OUTPUT
         env:
           GH_TOKEN: ${{ secrets.gh_token }}
-
-      - name: List all single-select fields in the project
-        run: |
-          PROJECT_ID=${{ steps.project.outputs.project_id }}
-      
-          echo "🔍 Listing all single-select fields for project ID: $PROJECT_ID"
-      
-          gh api graphql -f query='
-            query($projectId: ID!) {
-              node(id: $projectId) {
-                ... on ProjectV2 {
-                  fields(first: 100) {
-                    nodes {
-                      __typename
-                      ... on ProjectV2SingleSelectField {
-                        id
-                        name
-                        options {
-                          id
-                          name
-                        }
-                      }
-                    }
-                  }
-                }
-              }
-            }' -f projectId="$PROJECT_ID" | jq .
-        env:
-          GH_TOKEN: ${{ secrets.gh_token }}
-
 
       - name: Get "Status" field ID and option ID
         id: status_field
@@ -157,129 +79,79 @@ jobs:
           PROJECT_ID=${{ steps.project.outputs.project_id }}
           FIELD_NAME="Status"
           STATUS_OPTION_NAME="${{ inputs.project_column_name }}"
-      
-          # Get Status field ID (handle union types)
-          gh api graphql -f query='
-            query($projectId: ID!) {
-              node(id: $projectId) {
-                ... on ProjectV2 {
-                  fields(first: 100) {
-                    nodes {
-                      ... on ProjectV2SingleSelectField {
-                        id
-                        name
-                        options {
-                          id
-                          name
-                        }
-                      }
+
+          gh api graphql -f query='query($projectId: ID!) {
+            node(id: $projectId) {
+              ... on ProjectV2 {
+                fields(first: 100) {
+                  nodes {
+                    ... on ProjectV2SingleSelectField {
+                      id name options { id name }
                     }
                   }
                 }
               }
-            }' -f projectId="$PROJECT_ID" > fields.json
-      
-          FIELD_ID=$(jq -r '.data.node.fields.nodes[] | select(.name == "'"$FIELD_NAME"'") | .id' fields.json)
-          OPTION_ID=$(jq -r '.data.node.fields.nodes[] | select(.name == "'"$FIELD_NAME"'") | .options[] | select(.name == "'"$STATUS_OPTION_NAME"'") | .id' fields.json)
-      
+            }
+          }' -f projectId="$PROJECT_ID" > fields.json
+
+          FIELD_ID=$(jq -r '.data.node.fields.nodes[] | select(.name == "'$FIELD_NAME'") | .id' fields.json)
+          OPTION_ID=$(jq -r '.data.node.fields.nodes[] | select(.name == "'$FIELD_NAME'") | .options[] | select(.name == "'$STATUS_OPTION_NAME'") | .id' fields.json)
+
           if [ -z "$FIELD_ID" ] || [ -z "$OPTION_ID" ]; then
-            echo "❌ Could not find field or option IDs."
+            echo "Could not find field or option IDs"
             exit 1
           fi
-      
+
           echo "field_id=$FIELD_ID" >> $GITHUB_OUTPUT
           echo "option_id=$OPTION_ID" >> $GITHUB_OUTPUT
         env:
           GH_TOKEN: ${{ secrets.gh_token }}
-      
+
       - name: Map issues to project item IDs
-        id: map_issues
+        id: map_items
         run: |
           PROJECT_ID=${{ steps.project.outputs.project_id }}
-          ISSUE_LIST="${{ steps.get_issues.outputs.issue_list }}"
-          echo "$ISSUE_LIST" > issues.csv
-      
-          echo "issue_number,item_id" > project_items.csv
-      
-          # Fetch all project items with content (issues), paginated
-          endCursor=""
-          hasNextPage=true
-      
-          while [ "$hasNextPage" = true ]; do
-            QUERY=$(cat <<EOF
-              query {
-                node(id: "$PROJECT_ID") {
-                  ... on ProjectV2 {
-                    items(first: 100, after: $endCursor) {
-                      pageInfo {
-                        endCursor
-                        hasNextPage
-                      }
-                      nodes {
-                        id
-                        content {
-                          ... on Issue {
-                            number
-                          }
-                        }
-                      }
+          declare -A ITEM_IDS
+
+          while IFS="," read -r ISSUE_NUM ISSUE_NODE_ID; do
+            ITEM_ID=$(gh api graphql -f query='query($projectId: ID!, $contentId: ID!) {
+              node(id: $projectId) {
+                ... on ProjectV2 {
+                  items(first: 100) {
+                    nodes {
+                      id content { ... on Issue { id number } }
                     }
                   }
                 }
               }
-            EOF
-            )
-      
-            RESULT=$(gh api graphql -f query="$QUERY")
-      
-            echo "$RESULT" | jq -r '.data.node.items.nodes[] | select(.content.number != null) | "\(.content.number),\(.id)"' >> project_items.csv
-      
-            hasNextPage=$(echo "$RESULT" | jq -r '.data.node.items.pageInfo.hasNextPage')
-            endCursorVal=$(echo "$RESULT" | jq -r '.data.node.items.pageInfo.endCursor')
-      
-            if [ "$endCursorVal" = "null" ]; then
-              break
+            }' -f projectId="$PROJECT_ID" -f contentId="$ISSUE_NODE_ID" | jq -r ".data.node.items.nodes[] | select(.content.id == \"$ISSUE_NODE_ID\") | .id")
+
+            if [ -n "$ITEM_ID" ]; then
+              echo "$ISSUE_NUM=$ITEM_ID" >> issue_items.env
             fi
-      
-            endCursor="\"$endCursorVal\""
-          done
-      
-          echo "Mapped items:"
-          cat project_items.csv
+          done <<< "${{ steps.get_issues.outputs.issue_list }}"
+
+          cat issue_items.env
         env:
           GH_TOKEN: ${{ secrets.gh_token }}
 
-      - name: Set status field for each issue in project
+      - name: Set Status field to selected value
         run: |
           FIELD_ID=${{ steps.status_field.outputs.field_id }}
           OPTION_ID=${{ steps.status_field.outputs.option_id }}
           PROJECT_ID=${{ steps.project.outputs.project_id }}
-      
-          while IFS=',' read -r issue_number item_id; do
-            if [ "$issue_number" = "issue_number" ]; then continue; fi
-      
-            echo "Updating status for issue #$issue_number (item_id: $item_id)"
-      
-            gh api graphql -f query='
-              mutation($projectId:ID!, $itemId:ID!, $fieldId:ID!, $optionId:String!) {
-                updateProjectV2ItemFieldValue(input: {
-                  projectId: $projectId,
-                  itemId: $itemId,
-                  fieldId: $fieldId,
-                  value: {
-                    singleSelectOptionId: $optionId
-                  }
-                }) {
-                  projectV2Item {
-                    id
-                  }
+
+          while IFS='=' read -r ISSUE_NUM ITEM_ID; do
+            echo "Setting status for issue #$ISSUE_NUM (item_id: $ITEM_ID)"
+
+            gh api graphql -f query='mutation($input: UpdateProjectV2ItemFieldValueInput!) {
+              updateProjectV2ItemFieldValue(input: $input) {
+                projectV2Item {
+                  id
                 }
-              }' \
-              -f projectId="$PROJECT_ID" \
-              -f itemId="$item_id" \
-              -f fieldId="$FIELD_ID" \
-              -f optionId="$OPTION_ID"
-      
-          done < project_items.csv
+              }
+            }' -f input="{\"projectId\":\"$PROJECT_ID\",\"itemId\":\"$ITEM_ID\",\"fieldId\":\"$FIELD_ID\",\"value\":{\"singleSelectOptionId\":\"$OPTION_ID\"}}"
+
+          done < issue_items.env
         env:
           GH_TOKEN: ${{ secrets.gh_token }}
