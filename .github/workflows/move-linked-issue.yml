@@ -227,7 +227,7 @@ jobs:
                   }
                 }
               }
-      EOF
+            EOF
             )
       
             RESULT=$(gh api graphql -f query="$QUERY")
