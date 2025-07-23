@@ -43,19 +43,17 @@ jobs:
         run: |
           for repo in $REPOS; do
             echo "Checking if issue exists in $repo..."
-
+          
             existing_title=$(gh issue list -R "$repo" --search "$ISSUE_TITLE" --json title -q '.[].title' | grep -F "$ISSUE_TITLE" || true)
             if [[ -z "$existing_title" ]]; then
               echo "Creating new issue in $repo"
-              issue_url=$(gh issue create -R "$repo" --title "$ISSUE_TITLE" --body "$ISSUE_BODY" --json url -q .url)
+              issue_url=$(gh issue create -R "$repo" --title "$ISSUE_TITLE" --body "$ISSUE_BODY" | head -n 1)
               echo "Created: $issue_url"
-
-              # Compute project name like "July 2025 Sprint"
+          
               project_name="$(date +'%B %Y') Sprint"
-
               echo "Locating project '$project_name' in $PROJECT_ORG..."
               project_id=$(gh projects list --owner "$PROJECT_ORG" --format json | jq -r --arg name "$project_name" '.[] | select(.title == $name) | .id')
-
+          
               if [[ -n "$project_id" ]]; then
                 echo "Adding issue to project"
                 gh projects item-create --project-id "$project_id" --url "$issue_url"
@@ -66,3 +64,4 @@ jobs:
               echo "Issue already exists in $repo"
             fi
           done
+
