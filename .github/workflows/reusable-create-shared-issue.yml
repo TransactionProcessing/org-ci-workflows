@@ -68,7 +68,7 @@ jobs:
               #  echo "Project '$project_name' not found in $PROJECT_ORG"
               #fi
               echo "Try listing projects for: $PROJECT_ORG"
-              gh projects list --owner "$PROJECT_ORG" --format json
+              gh projects list --org "$PROJECT_ORG" --format json
 
               echo "Try listing classic projects:"
               gh api orgs/$PROJECT_ORG/projects --paginate
