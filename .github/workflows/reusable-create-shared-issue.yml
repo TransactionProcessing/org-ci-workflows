@@ -85,10 +85,11 @@ jobs:
              
               if [[ -z "$project_id" ]]; then
                 echo "Project '$project_name' not found in $PROJECT_ORG"
-                echo "Adding issue to project"
-                gh projects item-create --project-id "$project_id" --url "$issue_url"
+                
               else
                 echo "Found project ID: $project_id"
+                echo "Adding issue to project"
+                gh projects item-create --project-id "$project_id" --url "$issue_url"
               fi
             else
               echo "Issue already exists in $repo"
