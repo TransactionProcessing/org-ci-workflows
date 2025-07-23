@@ -20,14 +20,14 @@ jobs:
   create-shared-issue:
     runs-on: ubuntu-latest
     steps:
-      - name: Install gh CLI extension for Projects
-        run: |
-          gh extension install github/gh-projects
-
       - name: Authenticate gh CLI
         run: gh auth status
         env:
           GH_TOKEN: ${{ secrets.gh_token }}
+
+      - name: Install gh CLI extension for Projects
+        run: |
+          gh extension install github/gh-projects
 
       - name: Loop over target repos and create issues
         env:
