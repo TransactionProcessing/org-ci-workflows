@@ -89,7 +89,31 @@ jobs:
               else
                 echo "Found project ID: $project_id"
                 echo "Adding issue to project"
-                gh projects item-create --project-id "$project_id" --url "$issue_url"
+                #gh projects item-create --project-id "$project_id" --url "$issue_url"
+                # Extract values
+                owner=$(echo "$issue_url" | cut -d/ -f4)
+                repo=$(echo "$issue_url" | cut -d/ -f5)
+                issue_number=$(echo "$issue_url" | cut -d/ -f7)
+                
+                # Get the issue node ID
+                issue_node_id=$(gh api "repos/$owner/$repo/issues/$issue_number" --jq .node_id)
+                               
+                # GraphQL mutation to add issue to project
+                mutation='
+                mutation AddIssueToProject($projectId:ID!, $contentId:ID!) {
+                  addProjectV2ItemById(input: {projectId: $projectId, contentId: $contentId}) {
+                    item {
+                      id
+                    }
+                  }
+                }'
+                
+                # Add the issue to the project
+                gh api graphql \
+                  -f query="$mutation" \
+                  -f projectId="$project_id" \
+                  -f contentId="$issue_node_id"
+                
               fi
             else
               echo "Issue already exists in $repo"
