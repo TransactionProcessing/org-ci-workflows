@@ -50,24 +50,42 @@ jobs:
               issue_url=$(gh issue create -R "$repo" --title "$ISSUE_TITLE" --body "$ISSUE_BODY" | head -n 1)
               echo "Created: $issue_url"
           
+              #project_name="$(date +'%B %Y') Sprint"
+              #echo "Locating project '$project_name' in $PROJECT_ORG..."
+              #project_json=$(gh projects list --org "$PROJECT_ORG" --format json 2>/dev/null)
+              #if ! echo "$project_json" | jq empty; then
+              #  echo "Failed to get valid JSON from gh projects list"
+              #  echo "$project_json"
+              #  exit 1
+              #fi
+              #project_id=$(echo "$project_json" | jq -r --arg name "$project_name" '.[] | select(.title == $name) | .id')
+          
+              #if [[ -n "$project_id" ]]; then
+              #  echo "Adding issue to project"
+              #  gh projects item-create --project-id "$project_id" --url "$issue_url"
+              #else
+              #  echo "Project '$project_name' not found in $PROJECT_ORG"
+              #fi
+              #echo "Try listing projects for: $PROJECT_ORG"
+              #gh projects list --org "$PROJECT_ORG" --format json
               project_name="$(date +'%B %Y') Sprint"
-              echo "Locating project '$project_name' in $PROJECT_ORG..."
-              project_json=$(gh projects list --org "$PROJECT_ORG" --format json 2>/dev/null)
+              echo "Looking for project: $project_name in $PROJECT_ORG"
+              
+              project_json=$(gh projects list --owner "$PROJECT_ORG" --format json 2>/dev/null)
+              
               if ! echo "$project_json" | jq empty; then
-                echo "Failed to get valid JSON from gh projects list"
+                echo "Invalid or empty JSON received from gh projects list"
                 echo "$project_json"
                 exit 1
               fi
+              
               project_id=$(echo "$project_json" | jq -r --arg name "$project_name" '.[] | select(.title == $name) | .id')
-          
-              if [[ -n "$project_id" ]]; then
-                echo "Adding issue to project"
-                gh projects item-create --project-id "$project_id" --url "$issue_url"
-              else
+              
+              if [[ -z "$project_id" ]]; then
                 echo "Project '$project_name' not found in $PROJECT_ORG"
+              else
+                echo "Found project ID: $project_id"
               fi
-              #echo "Try listing projects for: $PROJECT_ORG"
-              #gh projects list --org "$PROJECT_ORG" --format json              
             else
               echo "Issue already exists in $repo"
             fi
