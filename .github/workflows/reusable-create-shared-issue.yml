@@ -30,10 +30,12 @@ jobs:
       - name: Install gh CLI extension for Projects
         run: |
           gh extension install github/gh-projects
+        env:
+          GH_TOKEN: ${{ secrets.gh_token }}
 
       - name: Loop over target repos and create issues
         env:
-          GH_TOKEN: ${{ secrets.GH_PAT }}
+          GH_TOKEN: ${{ secrets.gh_token }}
           ISSUE_TITLE: ${{ inputs.issue-title }}
           ISSUE_BODY: ${{ inputs.issue-body }}
           REPOS: ${{ inputs.target-repos }}
