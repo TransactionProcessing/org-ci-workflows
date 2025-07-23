@@ -52,7 +52,14 @@ jobs:
           
               project_name="$(date +'%B %Y') Sprint"
               echo "Locating project '$project_name' in $PROJECT_ORG..."
-              project_id=$(gh projects list --owner "$PROJECT_ORG" --format json | jq -r --arg name "$project_name" '.[] | select(.title == $name) | .id')
+              project_json=$(gh projects list --owner "$PROJECT_ORG" --format json 2>/dev/null)
+
+              if ! echo "$project_json" | jq empty; then
+                echo "Failed to get valid JSON from gh projects list"
+                echo "$project_json"
+                exit 1
+              fi
+              project_id=$(echo "$project_json" | jq -r --arg name "$project_name" '.[] | select(.title == $name) | .id')
           
               if [[ -n "$project_id" ]]; then
                 echo "Adding issue to project"
