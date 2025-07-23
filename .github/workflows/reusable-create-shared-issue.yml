@@ -15,7 +15,9 @@ on:
       project-org:
         required: true
         type: string
-
+    secrets:
+      gh_token:
+        required: true
 jobs:
   create-shared-issue:
     runs-on: ubuntu-latest
