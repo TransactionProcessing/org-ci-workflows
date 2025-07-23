@@ -72,6 +72,10 @@ jobs:
               echo "Looking for project: $project_name in $PROJECT_ORG"
               
               project_json=$(gh projects list --owner "$PROJECT_ORG" --format json 2>/dev/null)
+
+              echo "---- Raw project_json ----"
+              echo "$project_json"
+              echo "---- End project_json ----"
               
               if ! echo "$project_json" | jq empty; then
                 echo "Invalid or empty JSON received from gh projects list"
