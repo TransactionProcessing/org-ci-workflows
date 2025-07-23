@@ -53,7 +53,7 @@ jobs:
               project_name="$(date +'%B %Y') Sprint"
               echo "Locating project '$project_name' in $PROJECT_ORG..."
               project_json=$(gh projects list --owner "$PROJECT_ORG" --format json 2>/dev/null)
-              echo "$project_json
+              echo "$project_json"
               if ! echo "$project_json" | jq empty; then
                 echo "Failed to get valid JSON from gh projects list"
                 echo "$project_json"
