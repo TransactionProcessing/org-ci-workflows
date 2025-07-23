@@ -70,13 +70,14 @@ jobs:
               #gh projects list --org "$PROJECT_ORG" --format json
               project_name="$(date +'%B %Y') Sprint"
               echo "Looking for project: $project_name in $PROJECT_ORG"
+              gh projects list --org "$PROJECT_ORG" --format json
               
-              project_json=$(gh projects list --owner "$PROJECT_ORG" --format json 2>/dev/null)
+              project_json=$(gh projects list --org "$PROJECT_ORG" --format json 2>/dev/null)
 
               if [[ -z "$project_json" || "$project_json" == "[]" ]]; then
                 echo "No projects returned by gh projects list"
                 echo "Are you sure there's a Project (v2) named '$project_name' in org '$PROJECT_ORG'?"
-                gh projects list --owner "$PROJECT_ORG" --format json
+                gh projects list --org "$PROJECT_ORG" --format json
                 exit 1
               fi
               
