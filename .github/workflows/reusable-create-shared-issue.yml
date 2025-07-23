@@ -81,8 +81,8 @@ jobs:
                 exit 1
               fi
               
-              project_id=$(echo "$project_json" | jq -r --arg name "$project_name" '.[] | select(.title == $name) | .id')
-              
+              project_id=$(echo "$project_json" | jq -r --arg name "$project_name" '.projects[] | select(.title == $name) | .id')
+             
               if [[ -z "$project_id" ]]; then
                 echo "Project '$project_name' not found in $PROJECT_ORG"
               else
