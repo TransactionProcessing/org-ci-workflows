@@ -176,14 +176,14 @@ jobs:
                         gh issue edit "$existing_number" --remove-label "$lbl" --repo ${{ github.repository }}
                     done
                     # Edit the issue
-                    gh issue edit "$existing_number" --add-label "$labels" --body-file "$tmpfile" --repo ${{ github.repository }}
+                    gh issue edit "$existing_number" --add-label "$label" --body-file "$tmpfile" --repo ${{ github.repository }}
                 else
                     echo "[DRY RUN] Would update issue #$existing_number with labels: $labels"
                 fi
             else
                 echo "Creating new issue for Codacy ID $id"
                 if [ "$DRY_RUN" != "true" ]; then
-                    gh issue create --title "$title" --label "$labels" --repo ${{ github.repository }} --body-file "$tmpfile"
+                    gh issue create --title "$title" --label "$label" --repo ${{ github.repository }} --body-file "$tmpfile"
                 else
                     echo "[DRY RUN] Would create issue '$title' with labels: $labels"
                 fi
