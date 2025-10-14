@@ -136,13 +136,13 @@ jobs:
                 # Get existing labels
                 existing_labels=$(gh issue view "$existing_number" --json labels -q '.labels[].name')
   
-                # Remove all existing labels
+                # Remove each existing label
                 for lbl in $existing_labels; do
-                  gh issue remove-label "$lbl" "$existing_number" --repo ${{ github.repository }}
+                  gh issue edit "$existing_number" --remove-label "$lbl" --repo ${{ github.repository }}
                 done
-  
+                
                 # Add new labels
-                gh issue add-label $labels "$existing_number" --repo ${{ github.repository }}
+                gh issue edit "$existing_number" --add-label $labels --body "$body" --repo ${{ github.repository }}
              
                 gh issue edit "$existing_number" \
                   --body "$body" \
