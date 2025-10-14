@@ -100,7 +100,7 @@ jobs:
               label="task,security"
             elif [[ "$category_lower" =~ performance ]]; then
               label="task,performance"
-            elif [[ "$category_lower" =~ (refactor|best[._ ]?practice|code[._ ]?style|complexity) ]]; then
+            elif [[ "$category_lower" =~ (refactor|best[._ ]?practice|code[._ ]?style|complexity|unused[._ ]?code) ]]; then
               label="refactor"
             else
               label=""
