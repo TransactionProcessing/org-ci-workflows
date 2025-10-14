@@ -133,10 +133,19 @@ jobs:
             if [ -n "$existing_number" ]; then
               echo "Updating existing issue #$existing_number ($id)"
               if [ "$DRY_RUN" != "true" ]; then
+                # Get existing labels
+                existing_labels=$(gh issue view "$existing_number" --json labels -q '.labels[].name')
+  
+                # Remove all existing labels
+                for lbl in $existing_labels; do
+                  gh issue remove-label "$lbl" --issue "$existing_number" --repo ${{ github.repository }}
+                done
+  
+                # Add new labels
+                gh issue add-label $labels --issue "$existing_number" --repo ${{ github.repository }}
+             
                 gh issue edit "$existing_number" \
                   --body "$body" \
-                  --clear-labels \
-                  --add-label "$label" \
                   --repo ${{ github.repository }}
               else
                 echo "[DRY RUN] Would update issue #$existing_number"
