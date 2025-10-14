@@ -130,38 +130,68 @@ jobs:
             # Check for existing issue
             existing_number=$(echo "$current_issues" | jq -r --arg id "$id" '.[] | select(.body | contains($id)) | .number')
 
-            if [ -n "$existing_number" ]; then
-              echo "Updating existing issue #$existing_number ($id)"
-              if [ "$DRY_RUN" != "true" ]; then
-                # Get existing labels
-                existing_labels=$(gh issue view "$existing_number" --json labels -q '.labels[].name')
+            #if [ -n "$existing_number" ]; then
+            #  echo "Updating existing issue #$existing_number ($id)"
+            #  if [ "$DRY_RUN" != "true" ]; then
+            #    # Get existing labels
+            #    existing_labels=$(gh issue view "$existing_number" --json labels -q '.labels[].name')
   
-                # Remove each existing label
-                for lbl in $existing_labels; do
-                  gh issue edit "$existing_number" --remove-label "$lbl" --repo ${{ github.repository }}
-                done
+            #    # Remove each existing label
+            #    for lbl in $existing_labels; do
+            #      gh issue edit "$existing_number" --remove-label "$lbl" --repo ${{ github.repository }}
+            #    done
                 
-                # Add new labels
-                gh issue edit "$existing_number" --add-label $labels --body "$body" --repo ${{ github.repository }}
+            #    # Add new labels
+            #    gh issue edit "$existing_number" --add-label $labels --body "$body" --repo ${{ github.repository }}
              
-                gh issue edit "$existing_number" \
-                  --body "$body" \
-                  --repo ${{ github.repository }}
-              else
-                echo "[DRY RUN] Would update issue #$existing_number"
-              fi
+            #    gh issue edit "$existing_number" \
+            #      --body "$body" \
+            #      --repo ${{ github.repository }}
+            #  else
+            #    echo "[DRY RUN] Would update issue #$existing_number"
+            #  fi
+            #else
+            #  echo "Creating new issue for Codacy ID $id"
+            #  if [ "$DRY_RUN" != "true" ]; then
+            #    gh issue create \
+            #      --title "$title" \
+            #      --body "$body" \
+            #      --label "$label" \
+            #      --repo ${{ github.repository }}
+            #  else
+            #    echo "[DRY RUN] Would create issue '$title' with label '$label'"
+            #  fi
+            #fi
+
+            # Write body to a temporary file
+            tmpfile=$(mktemp)
+            echo "$body" > "$tmpfile"
+            
+            if [ -n "$existing_number" ]; then
+                echo "Updating existing issue #$existing_number ($id)"
+                if [ "$DRY_RUN" != "true" ]; then
+                    # Clear old labels
+                    existing_labels=$(gh issue view "$existing_number" --json labels -q '.labels[].name')
+                    for lbl in $existing_labels; do
+                        gh issue edit "$existing_number" --remove-label "$lbl" --repo ${{ github.repository }}
+                    done
+                    # Edit the issue
+                    gh issue edit "$existing_number" --add-label "$labels" --body-file "$tmpfile" --repo ${{ github.repository }}
+                else
+                    echo "[DRY RUN] Would update issue #$existing_number with labels: $labels"
+                fi
             else
-              echo "Creating new issue for Codacy ID $id"
-              if [ "$DRY_RUN" != "true" ]; then
-                gh issue create \
-                  --title "$title" \
-                  --body "$body" \
-                  --label "$label" \
-                  --repo ${{ github.repository }}
-              else
-                echo "[DRY RUN] Would create issue '$title' with label '$label'"
-              fi
+                echo "Creating new issue for Codacy ID $id"
+                if [ "$DRY_RUN" != "true" ]; then
+                    gh issue create --title "$title" --label "$labels" --repo ${{ github.repository }} --body-file "$tmpfile"
+                else
+                    echo "[DRY RUN] Would create issue '$title' with labels: $labels"
+                fi
             fi
+            
+            # Clean up temp file
+            rm "$tmpfile"
+            
           done
 
       # STEP 4: Close resolved issues
