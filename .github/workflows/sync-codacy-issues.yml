@@ -107,20 +107,20 @@ jobs:
             # Build body (well formatted with Markdown)
             body="**Codacy ID:** \`$id\`
 
-**File:** \`$file\`
-**Line:** $line
-**Rule:** $category ($severity)
-**Commit:** \`$sha\`
+            **File:** \`$file\`
+            **Line:** $line
+            **Rule:** $category ($severity)
+            **Commit:** \`$sha\`
 
-**Message:** $message"
+            **Message:** $message"
 
             if [ -n "$clean_line_text" ]; then
               body+="
 
-**Code Snippet:**
-\`\`\`csharp
-$clean_line_text
-\`\`\`"
+              **Code Snippet:**
+              \`\`\`csharp
+              $clean_line_text
+              \`\`\`"
             fi
 
             # Check for existing issue
