@@ -138,11 +138,11 @@ jobs:
   
                 # Remove all existing labels
                 for lbl in $existing_labels; do
-                  gh issue remove-label "$lbl" --issue "$existing_number" --repo ${{ github.repository }}
+                  gh issue remove-label "$lbl" "$existing_number" --repo ${{ github.repository }}
                 done
   
                 # Add new labels
-                gh issue add-label $labels --issue "$existing_number" --repo ${{ github.repository }}
+                gh issue add-label $labels "$existing_number" --repo ${{ github.repository }}
              
                 gh issue edit "$existing_number" \
                   --body "$body" \
