@@ -200,23 +200,18 @@ jobs:
           GH_TOKEN: ${{ secrets.GH_TOKEN }}
           DRY_RUN: ${{ inputs.dry_run }}
         run: |
-          # Get the current Codacy IDs from the latest Codacy analysis
           current_ids=$(jq -r '.data[].issueId' codacy_issues.json)
       
-          # Fetch all open issues in the repo
           gh issue list --repo ${{ github.repository }} --state open --json number,body | jq -c '.[]' | while read -r issue; do
               number=$(echo "$issue" | jq -r '.number')
               body=$(echo "$issue" | jq -r '.body')
       
-              # Extract Codacy ID from the body reliably
-              id=$(echo "$body" | grep -oP '(?<=\*\*Codacy ID:\*\* `)[a-f0-9]+(?=`)')
+              # Extract Codacy ID (POSIX compatible)
+              id=$(echo "$body" | sed -n 's/.*\*\*Codacy ID:\*\* `\([a-f0-9]\+\)`.*/\1/p')
       
-              # Skip issues without a Codacy ID
-              if [ -z "$id" ]; then
-                  continue
-              fi
+              # Skip if no ID found
+              [ -z "$id" ] && continue
       
-              # Close issue if it's no longer in the current analysis
               if ! echo "$current_ids" | grep -q "$id"; then
                   echo "Closing stale Codacy issue #$number ($id)"
                   if [ "$DRY_RUN" != "true" ]; then
@@ -228,4 +223,5 @@ jobs:
                   fi
               fi
           done
+
 
