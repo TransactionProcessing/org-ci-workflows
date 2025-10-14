@@ -1,0 +1,172 @@
+name: Sync Codacy Issues
+
+on:
+  workflow_call:
+    inputs:
+      dry_run:
+        description: "Run without creating or modifying GitHub issues"
+        required: false
+        default: "false"
+    secrets:
+      GH_TOKEN:
+        required: true
+      CODACY_API_TOKEN:
+        required: true
+
+jobs:
+  sync-codacy:
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+      contents: read
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update -y
+          sudo apt-get install -y jq gh
+
+      # STEP 1: Fetch Codacy issues
+      - name: Fetch Codacy Issues
+        env:
+          CODACY_API_TOKEN: ${{ secrets.CODACY_API_TOKEN }}
+        run: |
+          curl --request POST \
+            --url "https://app.codacy.com/api/v3/analysis/organizations/gh/${{ github.repository_owner }}/repositories/${{ github.event.repository.name }}/issues/search" \
+            --header "api-token: $CODACY_API_TOKEN" \
+            --header "content-type: application/json" \
+            --data '{"levels":["Error","Warning","High"]}' \
+            --silent \
+            --fail \
+            -o codacy_issues.json
+
+      # STEP 2: Ensure standard labels exist (with color palette)
+      - name: Ensure standard labels exist
+        env:
+          GH_TOKEN: ${{ secrets.GH_TOKEN }}
+        run: |
+          declare -A LABELS=(
+            ["task"]="#aefcde Tasks and work items"
+            ["refactor"]="#eb69a2 Code cleanup and best practices"
+            ["bug"]="#b60205 Bugs and error-prone code"
+            ["security"]="#d93f0b Security-related issues"
+            ["performance"]="#e57504 Performance optimization issues"
+          )
+
+          for label in "${!LABELS[@]}"; do
+            color=$(echo "${LABELS[$label]}" | awk '{print $1}')
+            description=$(echo "${LABELS[$label]}" | cut -d' ' -f2-)
+            echo "Ensuring label '$label' exists..."
+            gh label create "$label" \
+              --color "$color" \
+              --description "$description" \
+              --repo ${{ github.repository }} \
+              --force || true
+          done
+
+      # STEP 3: Sync issues (create/update)
+      - name: Sync Codacy Issues
+        env:
+          GH_TOKEN: ${{ secrets.GH_TOKEN }}
+          DRY_RUN: ${{ inputs.dry_run }}
+        run: |
+          current_issues=$(gh issue list --repo ${{ github.repository }} --state open --json number,title,body,labels)
+
+          jq -c '.data[]' codacy_issues.json | while read -r issue; do
+            id=$(echo "$issue" | jq -r '.issueId')
+            file=$(echo "$issue" | jq -r '.filePath')
+            line=$(echo "$issue" | jq -r '.lineNumber')
+            message=$(echo "$issue" | jq -r '.message')
+            line_text=$(echo "$issue" | jq -r '.lineText // empty')
+            category=$(echo "$issue" | jq -r '.patternInfo.category')
+            severity=$(echo "$issue" | jq -r '.patternInfo.severityLevel')
+            sha=$(echo "$issue" | jq -r '.commitInfo.sha')
+
+            # Clean and normalize values
+            clean_line_text=$(echo "$line_text" | tr -d '\r' | tr '\n' ' ' | sed 's/\\n/ /g')
+            category_lower=$(echo "$category" | tr '[:upper:]' '[:lower:]')
+            message_lower=$(echo "$message" | tr '[:upper:]' '[:lower:]')
+
+            # Determine label based on rules
+            label="task"
+            if [[ "$category_lower" =~ (bug|error|errorprone|error-prone|error_prone) ]]; then
+              label="bug"
+            elif [[ "$category_lower" =~ security ]]; then
+              label="security"
+            elif [[ "$category_lower" =~ performance ]]; then
+              label="performance"
+            elif [[ "$category_lower" =~ (refactor|best.practice|best_practice|code.style|code_style|complexity) ]]; then
+              label="refactor"
+            fi
+
+            title="[$category] $message"
+
+            # Build body (well formatted with Markdown)
+            body="**Codacy ID:** \`$id\`
+
+**File:** \`$file\`
+**Line:** $line
+**Rule:** $category ($severity)
+**Commit:** \`$sha\`
+
+**Message:** $message"
+
+            if [ -n "$clean_line_text" ]; then
+              body+="
+
+**Code Snippet:**
+\`\`\`csharp
+$clean_line_text
+\`\`\`"
+            fi
+
+            # Check for existing issue
+            existing_number=$(echo "$current_issues" | jq -r --arg id "$id" '.[] | select(.body | contains($id)) | .number')
+
+            if [ -n "$existing_number" ]; then
+              echo "Updating existing issue #$existing_number ($id)"
+              if [ "$DRY_RUN" != "true" ]; then
+                gh issue edit "$existing_number" \
+                  --body "$body" \
+                  --add-label "$label" \
+                  --repo ${{ github.repository }}
+              else
+                echo "[DRY RUN] Would update issue #$existing_number"
+              fi
+            else
+              echo "Creating new issue for Codacy ID $id"
+              if [ "$DRY_RUN" != "true" ]; then
+                gh issue create \
+                  --title "$title" \
+                  --body "$body" \
+                  --label "$label" \
+                  --repo ${{ github.repository }}
+              else
+                echo "[DRY RUN] Would create issue '$title' with label '$label'"
+              fi
+            fi
+          done
+
+      # STEP 4: Close resolved issues
+      - name: Close resolved issues
+        env:
+          GH_TOKEN: ${{ secrets.GH_TOKEN }}
+          DRY_RUN: ${{ inputs.dry_run }}
+        run: |
+          current_ids=$(jq -r '.data[].issueId' codacy_issues.json)
+          gh issue list --repo ${{ github.repository }} --state open --json number,body | jq -c '.[]' | while read -r issue; do
+            number=$(echo "$issue" | jq -r '.number')
+            body=$(echo "$issue" | jq -r '.body')
+            id=$(echo "$body" | grep -oE 'Codacy ID: [a-f0-9]+' | awk '{print $3}')
+            if [ -n "$id" ] && ! echo "$current_ids" | grep -q "$id"; then
+              echo "Closing stale Codacy issue #$number ($id)"
+              if [ "$DRY_RUN" != "true" ]; then
+                gh issue close "$number" --comment "This issue no longer appears in Codacy reports and has been auto-closed." --repo ${{ github.repository }}
+              else
+                echo "[DRY RUN] Would close issue #$number"
+              fi
+            fi
+          done
