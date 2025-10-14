@@ -91,17 +91,19 @@ jobs:
             category_lower=$(echo "$category" | tr '[:upper:]' '[:lower:]')
             message_lower=$(echo "$message" | tr '[:upper:]' '[:lower:]')
 
-            # Determine label based on rules
-            if echo "$message" | grep -iq "TODO"; then
-              labels=task"
+            # Determine label(s)
+            if echo "$message_lower" | grep -q "todo"; then
+              label="task"
             elif [[ "$category_lower" =~ (bug|error|errorprone|error-prone|error_prone) ]]; then
               label="bug"
             elif [[ "$category_lower" =~ security ]]; then
-              label="security"
+              label="task,security"
             elif [[ "$category_lower" =~ performance ]]; then
-              label="performance"
-            elif [[ "$category_lower" =~ (refactor|best.practice|best_practice|code.style|code_style|complexity) ]]; then
+              label="task,performance"
+            elif [[ "$category_lower" =~ (refactor|best[._ ]?practice|code[._ ]?style|complexity) ]]; then
               label="refactor"
+            else
+              label=""
             fi
 
             title="[$category] $message"
