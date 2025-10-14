@@ -92,8 +92,9 @@ jobs:
             message_lower=$(echo "$message" | tr '[:upper:]' '[:lower:]')
 
             # Determine label based on rules
-            label="task"
-            if [[ "$category_lower" =~ (bug|error|errorprone|error-prone|error_prone) ]]; then
+            if echo "$message" | grep -iq "TODO"; then
+              labels=task"
+            elif [[ "$category_lower" =~ (bug|error|errorprone|error-prone|error_prone) ]]; then
               label="bug"
             elif [[ "$category_lower" =~ security ]]; then
               label="security"
@@ -132,7 +133,7 @@ jobs:
               if [ "$DRY_RUN" != "true" ]; then
                 gh issue edit "$existing_number" \
                   --body "$body" \
-                  --add-label "$label" \
+                  --label "$label" \
                   --repo ${{ github.repository }}
               else
                 echo "[DRY RUN] Would update issue #$existing_number"
