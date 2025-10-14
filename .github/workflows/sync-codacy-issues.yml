@@ -6,7 +6,8 @@ on:
       dry_run:
         description: "Run without creating or modifying GitHub issues"
         required: false
-        default: "false"
+        default: false
+        type: boolean
     secrets:
       GH_TOKEN:
         required: true
