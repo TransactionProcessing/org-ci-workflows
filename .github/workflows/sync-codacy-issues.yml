@@ -135,7 +135,8 @@ jobs:
               if [ "$DRY_RUN" != "true" ]; then
                 gh issue edit "$existing_number" \
                   --body "$body" \
-                  --label "$label" \
+                  --clear-labels \
+                  --add-label "$label" \
                   --repo ${{ github.repository }}
               else
                 echo "[DRY RUN] Would update issue #$existing_number"
