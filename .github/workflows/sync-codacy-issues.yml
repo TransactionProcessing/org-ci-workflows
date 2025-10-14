@@ -194,23 +194,38 @@ jobs:
             
           done
 
-      # STEP 4: Close resolved issues
+      # 🔹 STEP 4: Close resolved issues
       - name: Close resolved issues
         env:
           GH_TOKEN: ${{ secrets.GH_TOKEN }}
           DRY_RUN: ${{ inputs.dry_run }}
         run: |
+          # Get the current Codacy IDs from the latest Codacy analysis
           current_ids=$(jq -r '.data[].issueId' codacy_issues.json)
+      
+          # Fetch all open issues in the repo
           gh issue list --repo ${{ github.repository }} --state open --json number,body | jq -c '.[]' | while read -r issue; do
-            number=$(echo "$issue" | jq -r '.number')
-            body=$(echo "$issue" | jq -r '.body')
-            id=$(echo "$body" | grep -oE 'Codacy ID: [a-f0-9]+' | awk '{print $3}')
-            if [ -n "$id" ] && ! echo "$current_ids" | grep -q "$id"; then
-              echo "Closing stale Codacy issue #$number ($id)"
-              if [ "$DRY_RUN" != "true" ]; then
-                gh issue close "$number" --comment "This issue no longer appears in Codacy reports and has been auto-closed." --repo ${{ github.repository }}
-              else
-                echo "[DRY RUN] Would close issue #$number"
+              number=$(echo "$issue" | jq -r '.number')
+              body=$(echo "$issue" | jq -r '.body')
+      
+              # Extract Codacy ID from the body reliably
+              id=$(echo "$body" | grep -oP '(?<=\*\*Codacy ID:\*\* `)[a-f0-9]+(?=`)')
+      
+              # Skip issues without a Codacy ID
+              if [ -z "$id" ]; then
+                  continue
               fi
-            fi
+      
+              # Close issue if it's no longer in the current analysis
+              if ! echo "$current_ids" | grep -q "$id"; then
+                  echo "Closing stale Codacy issue #$number ($id)"
+                  if [ "$DRY_RUN" != "true" ]; then
+                      gh issue close "$number" \
+                          --comment "This issue no longer appears in Codacy reports and has been auto-closed." \
+                          --repo ${{ github.repository }}
+                  else
+                      echo "[DRY RUN] Would close issue #$number"
+                  fi
+              fi
           done
+
