@@ -68,14 +68,12 @@ jobs:
               --force || true
           done
 
-      # STEP 3: Sync issues
       - name: Sync Codacy Issues
         env:
           GH_TOKEN: ${{ secrets.GH_TOKEN }}
           DRY_RUN: ${{ inputs.dry_run }}
         run: |
-          # Fetch ALL open issues (unlimited)
-          current_issues=$(gh issue list --limit 5000 --state open --repo ${{ github.repository }} --json number,title,body,labels)
+          current_issues=$(gh issue list --limit 5000 --repo ${{ github.repository }} --state open --json number,title,body,labels)
 
           jq -c '.data[]' codacy_issues.json | while read -r issue; do
             id=$(echo "$issue" | jq -r '.issueId')
@@ -89,7 +87,6 @@ jobs:
 
             clean_line_text=$(echo "$line_text" | tr -d '\r' | tr '\n' ' ')
 
-            # Label detection
             category_lower=$(echo "$category" | tr '[:upper:]' '[:lower:]')
             message_lower=$(echo "$message" | tr '[:upper:]' '[:lower:]')
 
@@ -109,58 +106,63 @@ jobs:
 
             title="[$category] $message"
 
-            # Body (stable formatting + hidden machine tag)
             body="<!-- CODACY-ID:$id -->
 
-            **Codacy ID:** \`$id\`
-
-            **File:** \`$file\`
-            **Line:** $line
-            **Rule:** $category ($severity)
-            **Commit:** \`$sha\`
-            
-            **Message:** $message
-            "
+          **Codacy ID:** \`$id\`
+          
+          **File:** \`$file\`
+          **Line:** $line
+          **Rule:** $category ($severity)
+          **Commit:** \`$sha\`
+          
+          **Message:** $message
+          "
 
             if [ -n "$clean_line_text" ]; then
               body+="
-            **Code Snippet:**
-            \`\`\`csharp
-            $clean_line_text
-            \`\`\`
-            "
+              **Code Snippet:**
+              \`\`\`csharp
+              $clean_line_text
+              \`\`\`
+              "
             fi
 
             tmpfile=$(mktemp)
             echo "$body" > "$tmpfile"
 
-            # Find existing issue via hidden marker
+            # Find existing issue reliably via hidden tag
             existing_number=$(echo "$current_issues" | jq -r --arg id "$id" '
               .[] | select(.body | contains("CODACY-ID:" + $id)) | .number
             ')
 
             if [ -n "$existing_number" ]; then
-                echo "Updating issue #$existing_number"
+                echo "Updating existing issue #$existing_number"
                 if [ "$DRY_RUN" != "true" ]; then
-                    # Apply update
+
+                    # ---- SAFE LABEL REMOVAL HERE ----
+                    existing_labels=$(gh issue view "$existing_number" --json labels -q '.labels[].name')
+                    for lbl in $existing_labels; do
+                        gh issue edit "$existing_number" --remove-label "$lbl" --repo ${{ github.repository }}
+                    done
+                    # --------------------------------
+
                     gh issue edit "$existing_number" \
-                      --body-file "$tmpfile" \
-                      --remove-label '*' \
                       --add-label "$label" \
+                      --body-file "$tmpfile" \
                       --repo ${{ github.repository }}
                 else
-                    echo "[DRY RUN] Would update #$existing_number"
+                    echo "[DRY RUN] Would update issue #$existing_number"
                 fi
             else
-                echo "Creating new issue for $id"
+                echo "Creating new issue for Codacy ID $id"
                 if [ "$DRY_RUN" != "true" ]; then
-                    gh issue create \
-                      --title "$title" \
-                      --label "$label" \
-                      --body-file "$tmpfile" \
-                      --repo ${{ github.repository }}
+                  gh issue create \
+                    --title "$title" \
+                    --label "$label" \
+                    --body-file "$tmpfile" \
+                    --repo ${{ github.repository }}
                 else
-                    echo "[DRY RUN] Would create new issue"
+                  echo "[DRY RUN] Would create new issue"
                 fi
             fi
 
