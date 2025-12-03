@@ -112,23 +112,23 @@ jobs:
             # Body (stable formatting + hidden machine tag)
             body="<!-- CODACY-ID:$id -->
 
-**Codacy ID:** \`$id\`
+            **Codacy ID:** \`$id\`
 
-**File:** \`$file\`
-**Line:** $line
-**Rule:** $category ($severity)
-**Commit:** \`$sha\`
-
-**Message:** $message
-"
+            **File:** \`$file\`
+            **Line:** $line
+            **Rule:** $category ($severity)
+            **Commit:** \`$sha\`
+            
+            **Message:** $message
+            "
 
             if [ -n "$clean_line_text" ]; then
               body+="
-**Code Snippet:**
-\`\`\`csharp
-$clean_line_text
-\`\`\`
-"
+            **Code Snippet:**
+            \`\`\`csharp
+            $clean_line_text
+            \`\`\`
+            "
             fi
 
             tmpfile=$(mktemp)
