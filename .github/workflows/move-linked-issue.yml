@@ -113,7 +113,7 @@ jobs:
           FIELD_ID="${{ steps.status_field.outputs.field_id }}"
           OPTION_ID="${{ steps.status_field.outputs.option_id }}"
 
-          # All issue node IDs from issues.csv
+          # Load Issue node IDs from issues.csv
           ISSUE_IDS=$(cut -d',' -f2 < issues.csv)
 
           echo "🔄 Mapping issues to project items using pagination..."
@@ -130,35 +130,13 @@ jobs:
               PAGINATION=", after: \"$END_CURSOR\""
             fi
 
-            # HEREDOC must start at column 0 for Bash
-cat <<EOF > query.graphql
-query {
-node(id: "$PROJECT_ID") {
-  ... on ProjectV2 {
-    items(first: 100$PAGINATION) {
-      nodes {
-        id
-        content {
-          ... on Issue {
-            id
-            number
-          }
-        }
-      }
-      pageInfo {
-        endCursor
-        hasNextPage
-      }
-    }
-  }
-}
-}
-EOF
+            # Build query using printf — avoids heredoc and indentation issues
+            printf "query {\nnode(id: \"%s\") {\n  ... on ProjectV2 {\n    items(first: 100%s) {\n      nodes {\n        id\n        content {\n          ... on Issue {\n            id\n            number\n          }\n        }\n      }\n      pageInfo {\n        endCursor\n        hasNextPage\n      }\n    }\n  }\n}\n}\n" "$PROJECT_ID" "$PAGINATION" > query.graphql
 
             # Execute GraphQL query
             RESPONSE=$(gh api graphql -f query=@query.graphql)
 
-            # Map issues to project item IDs
+            # Map issues → project item IDs
             echo "$RESPONSE" | jq -c '.data.node.items.nodes[]' | while read -r item; do
               ISSUE_ID=$(echo "$item" | jq -r '.content.id')
               ITEM_ID=$(echo "$item" | jq -r '.id')
@@ -169,9 +147,14 @@ EOF
             done
 
             # Handle pagination
-            HAS_NEXT_PAGE=$(echo "$RESPONSE" | jq -r '.data.node.ite
+            HAS_NEXT_PAGE=$(echo "$RESPONSE" | jq -r '.data.node.items.pageInfo.hasNextPage')
+            END_CURSOR=$(echo "$RESPONSE" | jq -r '.data.node.items.pageInfo.endCursor')
+          done
 
-
+          echo "🧩 Mapped issues to project items:"
+          cat item_ids.csv
+        env:
+          GH_TOKEN: ${{ secrets.gh_token }}
 
       - name: Set Status field to selected value
         run: |
