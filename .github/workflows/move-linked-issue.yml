@@ -152,7 +152,7 @@ jobs:
           EOF
       
             # Execute GraphQL query
-            RESPONSE=$(gh api graphql -F query=@query.graphql)
+            RESPONSE=$(gh api graphql -f query=@query.graphql)
       
             # Extract project item IDs matching our issues
             echo "$RESPONSE" | jq -c '.data.node.items.nodes[]' | while read -r item; do
