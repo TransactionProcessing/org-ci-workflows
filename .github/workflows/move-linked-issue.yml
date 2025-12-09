@@ -108,7 +108,7 @@ jobs:
 
       - name: Map issues to project item IDs (paginated)
         id: map_issues
-        run: |
+        run: >-
           PROJECT_ID="${{ steps.project.outputs.project_id }}"
 
           # Load issue IDs from the CSV (column 2)
