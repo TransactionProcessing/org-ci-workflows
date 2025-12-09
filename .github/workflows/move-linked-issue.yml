@@ -118,7 +118,7 @@ jobs:
           echo "🔄 Fetching project items with automatic pagination..."
       
           # Fetch every item across all pages (gh handles pagination)
-          gh project item-list $OWNER $PROJECT_NUMBER --format json --paginate > all_items.json
+          gh project item-list $OWNER $PROJECT_NUMBER --format json --limit 500 > all_items.json
       
           # Extract matches
           > item_ids.csv
