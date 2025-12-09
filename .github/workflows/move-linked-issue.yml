@@ -113,11 +113,12 @@ jobs:
           FIELD_ID="${{ steps.status_field.outputs.field_id }}"
           OPTION_ID="${{ steps.status_field.outputs.option_id }}"
 
-          # Load Issue node IDs from issues.csv
+          if [ -z "$PROJECT_ID" ]; then
+            echo "❌ PROJECT_ID is empty! Cannot continue."
+            exit 1
+          fi
+
           ISSUE_IDS=$(cut -d',' -f2 < issues.csv)
-
-          echo "🔄 Mapping issues to project items using pagination..."
-
           > item_ids.csv
 
           END_CURSOR=""
@@ -130,13 +131,11 @@ jobs:
               PAGINATION=", after: \"$END_CURSOR\""
             fi
 
-            # Build query using printf — avoids heredoc and indentation issues
+            # Build query.graphql safely with printf
             printf "query {\nnode(id: \"%s\") {\n  ... on ProjectV2 {\n    items(first: 100%s) {\n      nodes {\n        id\n        content {\n          ... on Issue {\n            id\n            number\n          }\n        }\n      }\n      pageInfo {\n        endCursor\n        hasNextPage\n      }\n    }\n  }\n}\n}\n" "$PROJECT_ID" "$PAGINATION" > query.graphql
 
-            # Execute GraphQL query
             RESPONSE=$(gh api graphql -f query=@query.graphql)
 
-            # Map issues → project item IDs
             echo "$RESPONSE" | jq -c '.data.node.items.nodes[]' | while read -r item; do
               ISSUE_ID=$(echo "$item" | jq -r '.content.id')
               ITEM_ID=$(echo "$item" | jq -r '.id')
@@ -146,7 +145,6 @@ jobs:
               fi
             done
 
-            # Handle pagination
             HAS_NEXT_PAGE=$(echo "$RESPONSE" | jq -r '.data.node.items.pageInfo.hasNextPage')
             END_CURSOR=$(echo "$RESPONSE" | jq -r '.data.node.items.pageInfo.endCursor')
           done
@@ -155,6 +153,7 @@ jobs:
           cat item_ids.csv
         env:
           GH_TOKEN: ${{ secrets.gh_token }}
+
 
       - name: Set Status field to selected value
         run: |
