@@ -106,7 +106,7 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.gh_token }}
 
-            - name: Map issues to project item IDs (paginated)
+      - name: Map issues to project item IDs (paginated)
         id: map_issues
         run: |
           set -e
