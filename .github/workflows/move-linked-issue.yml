@@ -166,7 +166,7 @@ jobs:
 
             RESPONSE=$(gh api graphql -f query=@query.graphql)
             echo "$RESPONSE" > response_debug.json
-
+            cat response_debug.json
             echo "$RESPONSE" | jq -c '.data.node.items.nodes[]' | while read -r item; do
               ISSUE_ID=$(echo "$item" | jq -r '.content.id')
               ITEM_ID=$(echo "$item" | jq -r '.id')
