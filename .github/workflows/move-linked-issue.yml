@@ -106,15 +106,18 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.gh_token }}
 
-      - name: Map issues to project item IDs (paginated)
+            - name: Map issues to project item IDs (paginated)
         id: map_issues
-        run: >-
-          PROJECT_ID="${{ steps.project.outputs.project_id }}"
+        run: |
+          set -e
 
-          # Load issue IDs from the CSV (column 2)
+          PROJECT_ID="${{ steps.project.outputs.project_id }}"
           ISSUE_IDS=$(cut -d',' -f2 < issues.csv)
 
           echo "🔄 Mapping issues to project items using pagination..."
+
+          # Delete any accidental or leftover query.graphql
+          rm -f query.graphql
 
           > item_ids.csv
 
@@ -151,9 +154,19 @@ jobs:
               echo "}"
             } > query.graphql
 
-            RESPONSE=$(gh api graphql -f query=@query.graphql)
+            echo "📄 query.graphql content:"
+            sed -n '1,20p' query.graphql
 
-            # Map items
+            echo "🧪 Validating file does NOT start with @"
+            FIRST_CHAR=$(head -c 1 query.graphql)
+            if [ "$FIRST_CHAR" = "@" ]; then
+              echo "❌ query.graphql starts with @ — something is overriding this file!"
+              exit 1
+            fi
+
+            RESPONSE=$(gh api graphql -f query=@query.graphql)
+            echo "$RESPONSE" > response_debug.json
+
             echo "$RESPONSE" | jq -c '.data.node.items.nodes[]' | while read -r item; do
               ISSUE_ID=$(echo "$item" | jq -r '.content.id')
               ITEM_ID=$(echo "$item" | jq -r '.id')
@@ -163,15 +176,14 @@ jobs:
               fi
             done
 
-            HAS_NEXT_PAGE=$(echo "$RESPONSE" | jq -r '.data.node.items.pageInfo.hasNextPage')
-            END_CURSOR=$(echo "$RESPONSE" | jq -r '.data.node.items.pageInfo.endCursor')
+            HAS_NEXT_PAGE=$(jq -r '.data.node.items.pageInfo.hasNextPage' < response_debug.json)
+            END_CURSOR=$(jq -r '.data.node.items.pageInfo.endCursor' < response_debug.json)
           done
 
           echo "🧩 Mapped issues to project items:"
           cat item_ids.csv
         env:
           GH_TOKEN: ${{ secrets.gh_token }}
-
 
 
       - name: Set Status field to selected value
