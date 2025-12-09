@@ -106,6 +106,14 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.gh_token }}
 
+      - name: Debug GH token access
+        run: |
+          echo "Testing token..."
+          gh api user || echo "❌ Token cannot access /user"
+          gh api graphql -f query='query { viewer { login } }' || echo "❌ Token cannot query GraphQL viewer"
+        env:
+          GH_TOKEN: ${{ secrets.gh_token }}
+
       - name: Map issues to project item IDs (paginated)
         id: map_issues
         run: |
