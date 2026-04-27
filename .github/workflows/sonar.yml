@@ -28,75 +28,6 @@ jobs:
 
       - name: Detect branch
         id: branch
-        run: |
-          if [[ "${GITHUB_REF##*/}" == "main" ]]; then
-            echo "is_main=true" >> $GITHUB_OUTPUT
-          else
-            echo "is_main=false" >> $GITHUB_OUTPUT
-          fi
-
-      - name: Setup .NET
-        uses: actions/setup-dotnet@v4
-        with:
-          dotnet-version: 9.0.x
-
-      - name: Install SonarScanner
-        run: dotnet tool install --global dotnet-sonarscanner
-
-      - name: Restore
-        run: dotnet restore
-
-      - name: Begin Sonar
-        run: |
-          dotnet sonarscanner begin \
-            /k:"${{ inputs.projectKey }}" \
-            /o:"${{ inputs.organisation }}" \
-            /d:sonar.login="${{ secrets.SONAR_TOKEN }}" \
-            /d:sonar.host.url="https://sonarcloud.io"
-
-      - name: Build
-        run: dotnet build --no-restore
-
-      - name: End Sonar
-        run: |
-          dotnet sonarscanner end \
-            /d:sonar.login="${{ secrets.SONAR_TOKEN }}"
-
-  sync-issues:
-    needs: analyse
-    if: needs.analyse.outputs.is_main == 'true'
-    runs-on: ubuntu-latest
-
-    steps:name: Sonar Analysis + Sync
-
-on:
-  workflow_call:
-    inputs:
-      projectKey:
-        required: true
-        type: string
-      organisation:
-        required: true
-        type: string
-    secrets:
-      SONAR_TOKEN:
-        required: true
-
-jobs:
-  analyse:
-    runs-on: ubuntu-latest
-
-    outputs:
-      is_main: ${{ steps.branch.outputs.is_main }}
-
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-
-      - name: Detect branch
-        id: branch
         shell: bash
         run: |
           BRANCH="${GITHUB_REF##*/}"
@@ -148,8 +79,10 @@ jobs:
           "https://sonarcloud.io/api/issues/search?componentKeys=${{ inputs.projectKey }}&severities=BLOCKER,CRITICAL&resolved=false" \
           -o sonar.json
 
-      - name: Sync to GitHub
+      - name: Sync to GitHub Issues
         uses: actions/github-script@v7
+        env:
+          PROJECT_KEY: ${{ inputs.projectKey }}
         with:
           script: |
             const fs = require('fs');
@@ -157,18 +90,19 @@ jobs:
 
             const owner = context.repo.owner;
             const repo = context.repo.repo;
+            const projectKey = process.env.PROJECT_KEY;
 
             const existingIssues = await github.paginate(
               github.rest.issues.listForRepo,
               { owner, repo, state: "open", per_page: 100 }
             );
 
-            const map = new Map();
+            const existingMap = new Map();
 
             for (const issue of existingIssues) {
               const match = issue.body?.match(/Sonar Key: ([A-Za-z0-9_-]+)/);
               if (match) {
-                map.set(match[1], issue);
+                existingMap.set(match[1], issue);
               }
             }
 
@@ -190,11 +124,11 @@ jobs:
                 `Line: ${s.line}`,
                 ``,
                 `Link:`,
-                `https://sonarcloud.io/project/issues?id=${{ inputs.projectKey }}&issues=${key}`
+                `https://sonarcloud.io/project/issues?id=${projectKey}&issues=${key}`
               ].join('\n');
 
-              if (map.has(key)) {
-                const existing = map.get(key);
+              if (existingMap.has(key)) {
+                const existing = existingMap.get(key);
 
                 await github.rest.issues.update({
                   owner,
@@ -215,90 +149,7 @@ jobs:
               }
             }
 
-            // Close issues no longer in Sonar
-            for (const [key, issue] of map.entries()) {
-              if (!activeKeys.has(key)) {
-                await github.rest.issues.update({
-                  owner,
-                  repo,
-                  issue_number: issue.number,
-                  state: "closed"
-                });
-              }
-            }
-      - name: Fetch Sonar Issues
-        run: |
-          curl -u "${{ secrets.SONAR_TOKEN }}:" \
-          "https://sonarcloud.io/api/issues/search?componentKeys=${{ inputs.projectKey }}&severities=BLOCKER,CRITICAL" \
-          -o sonar.json
-
-      - name: Sync to GitHub
-        uses: actions/github-script@v7
-        with:
-          script: |
-            const fs = require('fs');
-            const sonar = JSON.parse(fs.readFileSync('sonar.json', 'utf8'));
-
-            const owner = context.repo.owner;
-            const repo = context.repo.repo;
-
-            const existingIssues = await github.paginate(
-              github.rest.issues.listForRepo,
-              { owner, repo, state: "open", per_page: 100 }
-            );
-
-            const map = new Map();
-
-            for (const issue of existingIssues) {
-              const match = issue.body?.match(/Sonar Key: (\w+)/);
-              if (match) {
-                map.set(match[1], issue);
-              }
-            }
-
-            const activeKeys = new Set();
-
-            for (const s of sonar.issues) {
-              const key = s.key;
-              activeKeys.add(key);
-
-              const title = `[Sonar] ${s.message}`;
-              const body = `
-Sonar Key: ${key}
-
-Severity: ${s.severity}
-Type: ${s.type}
-
-File: ${s.component}
-Line: ${s.line}
-
-Link:
-https://sonarcloud.io/project/issues?id=${{ inputs.projectKey }}&issues=${key}
-`;
-
-              if (map.has(key)) {
-                const existing = map.get(key);
-
-                await github.rest.issues.update({
-                  owner,
-                  repo,
-                  issue_number: existing.number,
-                  title,
-                  body
-                });
-
-              } else {
-                await github.rest.issues.create({
-                  owner,
-                  repo,
-                  title,
-                  body,
-                  labels: ["sonar", s.severity.toLowerCase()]
-                });
-              }
-            }
-
-            for (const [key, issue] of map.entries()) {
+            for (const [key, issue] of existingMap.entries()) {
               if (!activeKeys.has(key)) {
                 await github.rest.issues.update({
                   owner,
