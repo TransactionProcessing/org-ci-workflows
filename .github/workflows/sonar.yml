@@ -4,7 +4,7 @@ on:
   workflow_call:
     inputs:
       projectKey:
-        required: true
+        required: false
         type: string
       organisation:
         required: true
@@ -19,6 +19,7 @@ jobs:
 
     outputs:
       is_main: ${{ steps.branch.outputs.is_main }}
+      resolved_project: ${{ steps.project.outputs.project }}
 
     steps:
       - name: Checkout
@@ -37,6 +38,16 @@ jobs:
             echo "is_main=false" >> "$GITHUB_OUTPUT"
           fi
 
+      - name: Resolve project key
+        id: project
+        shell: bash
+        run: |
+          if [ -n "${{ inputs.projectKey }}" ]; then
+            echo "project=${{ inputs.projectKey }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "project=${GITHUB_REPOSITORY#*/}" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Setup .NET
         uses: actions/setup-dotnet@v4
         with:
@@ -52,7 +63,7 @@ jobs:
         shell: bash
         run: |
           dotnet sonarscanner begin \
-            /k:"${{ inputs.projectKey }}" \
+            /k:"${{ steps.project.outputs.project }}" \
             /o:"${{ inputs.organisation }}" \
             /d:sonar.login="${{ secrets.SONAR_TOKEN }}" \
             /d:sonar.host.url="https://sonarcloud.io"
@@ -76,13 +87,13 @@ jobs:
         shell: bash
         run: |
           curl -u "${{ secrets.SONAR_TOKEN }}:" \
-          "https://sonarcloud.io/api/issues/search?componentKeys=${{ inputs.projectKey }}&severities=BLOCKER,CRITICAL&resolved=false" \
+          "https://sonarcloud.io/api/issues/search?componentKeys=${{ needs.analyse.outputs.resolved_project }}&severities=BLOCKER,CRITICAL&resolved=false" \
           -o sonar.json
 
-      - name: Sync to GitHub Issues
+      - name: Sync Issues to GitHub
         uses: actions/github-script@v7
         env:
-          PROJECT_KEY: ${{ inputs.projectKey }}
+          PROJECT_KEY: ${{ needs.analyse.outputs.resolved_project }}
         with:
           script: |
             const fs = require('fs');
@@ -97,22 +108,18 @@ jobs:
               { owner, repo, state: "open", per_page: 100 }
             );
 
-            const existingMap = new Map();
+            const map = new Map();
 
             for (const issue of existingIssues) {
               const match = issue.body?.match(/Sonar Key: ([A-Za-z0-9_-]+)/);
-              if (match) {
-                existingMap.set(match[1], issue);
-              }
+              if (match) map.set(match[1], issue);
             }
 
-            const activeKeys = new Set();
+            const active = new Set();
 
             for (const s of sonar.issues) {
               const key = s.key;
-              activeKeys.add(key);
-
-              const title = `[Sonar] ${s.message}`;
+              active.add(key);
 
               const body = [
                 `Sonar Key: ${key}`,
@@ -127,17 +134,16 @@ jobs:
                 `https://sonarcloud.io/project/issues?id=${projectKey}&issues=${key}`
               ].join('\n');
 
-              if (existingMap.has(key)) {
-                const existing = existingMap.get(key);
+              const title = `[Sonar] ${s.message}`;
 
+              if (map.has(key)) {
                 await github.rest.issues.update({
                   owner,
                   repo,
-                  issue_number: existing.number,
+                  issue_number: map.get(key).number,
                   title,
                   body
                 });
-
               } else {
                 await github.rest.issues.create({
                   owner,
@@ -149,8 +155,8 @@ jobs:
               }
             }
 
-            for (const [key, issue] of existingMap.entries()) {
-              if (!activeKeys.has(key)) {
+            for (const [key, issue] of map.entries()) {
+              if (!active.has(key)) {
                 await github.rest.issues.update({
                   owner,
                   repo,
