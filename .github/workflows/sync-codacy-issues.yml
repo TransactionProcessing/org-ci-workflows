@@ -197,7 +197,7 @@ jobs:
                 issues.push(...page);
                 core.info(`  Fetched page: ${page.length} issues (running total: ${issues.length})`);
 
-                cursor = (page.length === limit) ? response.pagination?.cursor : undefined;
+                cursor = response.pagination?.cursor || undefined;
                 if (cursor) await sleep(200); // courtesy pause between pages
               } while (cursor);
 
@@ -211,7 +211,7 @@ jobs:
                 { name: 'codacy',      color: '0075ca', description: 'Issue synced from Codacy' },
                 { name: 'bug',         color: 'b60205', description: 'Bugs and error-prone code' },
                 { name: 'security',    color: 'd93f0b', description: 'Security-related issues' },
-                { name: 'performance', color: 'e57504', description: 'Performance optimisation issues' },
+                { name: 'performance', color: 'e57504', description: 'Performance optimization issues' },
                 { name: 'refactor',    color: 'eb69a2', description: 'Code cleanup and best practices' },
                 { name: 'task',        color: '0e8a16', description: 'Tasks and work items' },
               ];
@@ -288,7 +288,9 @@ jobs:
               const tool      = patternInfo.patternId?.tool || '';
               const patternId = patternInfo.patternId?.id   || '';
               const rule      = patternId ? `${tool}/${patternId}` : category;
-              const codacyUrl = `https://app.codacy.com/gh/${codacyOrg}/${codacyRepo}/issues`;
+              const codacyFileUrl = filePath && filePath !== 'Unknown'
+                ? `https://app.codacy.com/gh/${codacyOrg}/${codacyRepo}/file?filename=${encodeURIComponent(filePath)}`
+                : `https://app.codacy.com/gh/${codacyOrg}/${codacyRepo}/issues`;
 
               let body =
                 `<!-- codacy-dedupe:${dedupeKey} -->\n\n` +
@@ -300,7 +302,7 @@ jobs:
                 `| **Severity** | ${severity} |\n` +
                 `| **Commit** | \`${sha}\` |\n\n` +
                 `**Message:** ${message}\n\n` +
-                `\u{1F517} [View in Codacy](${codacyUrl})\n`;
+                `\u{1F517} [View file in Codacy](${codacyFileUrl})\n`;
 
               if (lineText && lineText.trim()) {
                 body += `\n**Code Snippet:**\n\`\`\`\n${lineText.replace(/\r/g, '').trim()}\n\`\`\`\n`;
