@@ -1,202 +1,410 @@
 name: Sync Codacy Issues
 
+# Reusable workflow – call it from any repository in the organisation.
+# The caller should use `secrets: inherit` so CODACY_API_TOKEN is forwarded.
 on:
   workflow_call:
     inputs:
-      dry_run:
-        description: "Run without creating or modifying GitHub issues"
+      codacy_org:
+        description: >
+          Codacy organisation slug as it appears in the Codacy URL
+          (defaults to the calling repository's owner).
         required: false
-        default: false
+        type: string
+        default: ""
+
+      codacy_repo:
+        description: >
+          Codacy repository slug as it appears in the Codacy URL
+          (defaults to the calling repository's name).
+        required: false
+        type: string
+        default: ""
+
+      dry_run:
+        description: >
+          When true, log what *would* happen without creating, updating,
+          or closing any GitHub issues.
+        required: false
         type: boolean
+        default: false
+
+      severity_filter:
+        description: >
+          Comma-separated list of Codacy severity levels to include.
+          Valid values: Error, Warning, Info.
+        required: false
+        type: string
+        default: "Error,Warning,Info"
+
+      extra_labels:
+        description: >
+          Comma-separated list of additional labels to apply to every
+          synced issue (the `codacy` label is always added automatically).
+        required: false
+        type: string
+        default: ""
+
+      assignees:
+        description: >
+          Comma-separated list of GitHub usernames to assign to every
+          newly created issue.
+        required: false
+        type: string
+        default: ""
+
     secrets:
-      GH_TOKEN:
-        required: true
       CODACY_API_TOKEN:
+        description: >
+          Codacy API token with read access to the project.
+          Store this as an organisation secret named CODACY_API_TOKEN.
         required: true
 
 jobs:
   sync-codacy:
+    name: Sync Codacy → GitHub Issues
     runs-on: ubuntu-latest
+
+    # Minimal required permissions – GITHUB_TOKEN of the calling repo is used
+    # for all GitHub Issues CRUD operations.
     permissions:
       issues: write
       contents: read
 
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Install dependencies
-        run: |
-          sudo apt-get update -y
-          sudo apt-get install -y jq gh
-
-      # STEP 1: Fetch all Codacy issues (with explicit unlimited paging)
-      - name: Fetch Codacy Issues
+      - name: Sync Codacy Issues to GitHub
+        uses: actions/github-script@v7
         env:
-          CODACY_API_TOKEN: ${{ secrets.CODACY_API_TOKEN }}
-        run: |
-          curl --request POST \
-            --url "https://app.codacy.com/api/v3/analysis/organizations/gh/${{ github.repository_owner }}/repositories/${{ github.event.repository.name }}/issues/search" \
-            --header "api-token: $CODACY_API_TOKEN" \
-            --header "content-type: application/json" \
-            --data '{"levels":["Error","Warning","High"],"limit":10000}' \
-            --silent \
-            --fail \
-            -o codacy_issues.json
+          CODACY_API_TOKEN:  ${{ secrets.CODACY_API_TOKEN }}
+          DRY_RUN:           ${{ inputs.dry_run }}
+          CODACY_ORG_INPUT:  ${{ inputs.codacy_org }}
+          CODACY_REPO_INPUT: ${{ inputs.codacy_repo }}
+          EXTRA_LABELS:      ${{ inputs.extra_labels }}
+          ASSIGNEES:         ${{ inputs.assignees }}
+          SEVERITY_FILTER:   ${{ inputs.severity_filter }}
+        with:
+          # github.token is the GITHUB_TOKEN of the calling repository –
+          # no additional secret is needed for GitHub API access.
+          github-token: ${{ github.token }}
+          script: |
+            const https = require('https');
 
-      # STEP 2: Ensure standard labels exist
-      - name: Ensure standard labels exist
-        env:
-          GH_TOKEN: ${{ secrets.GH_TOKEN }}
-        run: |
-          declare -A LABELS=(
-            ["task"]="#aefcde Tasks and work items"
-            ["refactor"]="#eb69a2 Code cleanup and best practices"
-            ["bug"]="#b60205 Bugs and error-prone code"
-            ["security"]="#d93f0b Security-related issues"
-            ["performance"]="#e57504 Performance optimization issues"
-          )
+            // ── Configuration ───────────────────────────────────────────────────────
+            const codacyToken  = process.env.CODACY_API_TOKEN;
+            const dryRun       = process.env.DRY_RUN === 'true';
+            const codacyOrg    = process.env.CODACY_ORG_INPUT  || context.repo.owner;
+            const codacyRepo   = process.env.CODACY_REPO_INPUT || context.repo.repo;
+            const extraLabels  = (process.env.EXTRA_LABELS  || '').split(',').map(s => s.trim()).filter(Boolean);
+            const assigneeList = (process.env.ASSIGNEES     || '').split(',').map(s => s.trim()).filter(Boolean);
+            const severities   = (process.env.SEVERITY_FILTER || 'Error,Warning,Info')
+                                    .split(',').map(s => s.trim()).filter(Boolean);
 
-          for label in "${!LABELS[@]}"; do
-            color=$(echo "${LABELS[$label]}" | awk '{print $1}')
-            description=$(echo "${LABELS[$label]}" | cut -d' ' -f2-)
+            const { owner, repo } = context.repo;
 
-            gh label create "$label" \
-              --color "$color" \
-              --description "$description" \
-              --repo ${{ github.repository }} \
-              --force || true
-          done
+            if (!codacyToken) {
+              core.setFailed('CODACY_API_TOKEN secret is not set. Cannot call Codacy API.');
+              return;
+            }
 
-      - name: Sync Codacy Issues
-        env:
-          GH_TOKEN: ${{ secrets.GH_TOKEN }}
-          DRY_RUN: ${{ inputs.dry_run }}
-        run: |
-          current_issues=$(gh issue list --limit 5000 --repo ${{ github.repository }} --state open --json number,title,body,labels)
+            core.info(`Target repo  : ${owner}/${repo}`);
+            core.info(`Codacy target: gh/${codacyOrg}/${codacyRepo}`);
+            core.info(`Severities   : ${severities.join(', ')}`);
+            core.info(`Dry run      : ${dryRun}`);
 
-          jq -c '.data[]' codacy_issues.json | while read -r issue; do
-            id=$(echo "$issue" | jq -r '.issueId')
-            file=$(echo "$issue" | jq -r '.filePath')
-            line=$(echo "$issue" | jq -r '.lineNumber')
-            message=$(echo "$issue" | jq -r '.message')
-            line_text=$(echo "$issue" | jq -r '.lineText // empty')
-            category=$(echo "$issue" | jq -r '.patternInfo.category')
-            severity=$(echo "$issue" | jq -r '.patternInfo.severityLevel')
-            sha=$(echo "$issue" | jq -r '.commitInfo.sha')
+            // ── Helpers ─────────────────────────────────────────────────────────────
+            const sleep = ms => new Promise(r => setTimeout(r, ms));
 
-            clean_line_text=$(echo "$line_text" | tr -d '\r' | tr '\n' ' ')
+            /**
+             * Retries an async function up to `retries` times with exponential back-off.
+             * Respects a Retry-After header value stored on the thrown error if present.
+             */
+            async function withRetry(fn, retries = 4, baseDelay = 1000) {
+              for (let attempt = 0; attempt < retries; attempt++) {
+                try {
+                  return await fn();
+                } catch (err) {
+                  if (attempt === retries - 1) throw err;
+                  const delay = err.retryAfter
+                    ? err.retryAfter * 1000
+                    : baseDelay * Math.pow(2, attempt);
+                  core.warning(`Attempt ${attempt + 1} failed (${err.message}). Retrying in ${delay}ms…`);
+                  await sleep(delay);
+                }
+              }
+            }
 
-            category_lower=$(echo "$category" | tr '[:upper:]' '[:lower:]')
-            message_lower=$(echo "$message" | tr '[:upper:]' '[:lower:]')
+            /**
+             * Performs an HTTPS POST to the Codacy API.
+             * Throws an error enriched with `retryAfter` when rate-limited (429).
+             */
+            function codacyPost(path, body) {
+              return new Promise((resolve, reject) => {
+                const payload = JSON.stringify(body);
+                const options = {
+                  hostname: 'app.codacy.com',
+                  path,
+                  method: 'POST',
+                  headers: {
+                    'api-token':      codacyToken,
+                    'Content-Type':   'application/json',
+                    'Content-Length': Buffer.byteLength(payload),
+                  },
+                };
 
-            if echo "$message_lower" | grep -q "todo"; then
-              label="task"
-            elif [[ "$category_lower" =~ (bug|error|errorprone|error-prone|error_prone) ]]; then
-              label="bug"
-            elif [[ "$category_lower" =~ security ]]; then
-              label="security"
-            elif [[ "$category_lower" =~ performance ]]; then
-              label="performance"
-            elif [[ "$category_lower" =~ (refactor|best[._ ]?practice|code[._ ]?style|complexity|unused[._ ]?code) ]]; then
-              label="refactor"
-            else
-              label=""
-            fi
+                const req = https.request(options, res => {
+                  let data = '';
+                  res.on('data', chunk => { data += chunk; });
+                  res.on('end', () => {
+                    if (res.statusCode === 429) {
+                      const retryAfter = parseInt(res.headers['retry-after'] || '10', 10);
+                      const err = new Error(`Codacy rate limited (429). Retry-After: ${retryAfter}s`);
+                      err.retryAfter = retryAfter;
+                      return reject(err);
+                    }
+                    if (res.statusCode >= 200 && res.statusCode < 300) {
+                      try {
+                        return resolve(JSON.parse(data));
+                      } catch (e) {
+                        return reject(new Error(`Codacy API parse error: ${e.message}. Body: ${data.slice(0, 300)}`));
+                      }
+                    }
+                    reject(new Error(`Codacy API responded with ${res.statusCode}: ${data.slice(0, 300)}`));
+                  });
+                });
 
-            title="[$category] $message"
+                req.on('error', reject);
+                req.write(payload);
+                req.end();
+              });
+            }
 
-            body="<!-- CODACY-ID:$id -->
+            // ── 1. Fetch all Codacy issues (cursor-based pagination) ─────────────────
+            async function fetchCodacyIssues() {
+              const issues = [];
+              let cursor;
+              const limit   = 100;
+              const apiPath = `/api/v3/analysis/organizations/gh/${codacyOrg}/repositories/${codacyRepo}/issues/search`;
 
-          **Codacy ID:** \`$id\`
-          
-          **File:** \`$file\`
-          **Line:** $line
-          **Rule:** $category ($severity)
-          **Commit:** \`$sha\`
-          
-          **Message:** $message
-          "
+              core.info('Fetching Codacy issues…');
 
-            if [ -n "$clean_line_text" ]; then
-              body+="
-              **Code Snippet:**
-              \`\`\`csharp
-              $clean_line_text
-              \`\`\`
-              "
-            fi
+              do {
+                const requestBody = { limit, levels: severities };
+                if (cursor) requestBody.cursor = cursor;
 
-            tmpfile=$(mktemp)
-            echo "$body" > "$tmpfile"
+                const response = await withRetry(() => codacyPost(apiPath, requestBody));
+                const page     = response.data || [];
 
-            # Find existing issue reliably via hidden tag
-            existing_number=$(echo "$current_issues" | jq -r --arg id "$id" '
-              .[] | select(.body | contains("CODACY-ID:" + $id)) | .number
-            ')
+                issues.push(...page);
+                core.info(`  Fetched page: ${page.length} issues (running total: ${issues.length})`);
 
-            if [ -n "$existing_number" ]; then
-                echo "Updating existing issue #$existing_number"
-                if [ "$DRY_RUN" != "true" ]; then
+                cursor = response.pagination?.cursor || undefined;
+                if (cursor) await sleep(200); // courtesy pause between pages
+              } while (cursor);
 
-                    # ---- SAFE LABEL REMOVAL HERE ----
-                    existing_labels=$(gh issue view "$existing_number" --json labels -q '.labels[].name')
-                    for lbl in $existing_labels; do
-                        gh issue edit "$existing_number" --remove-label "$lbl" --repo ${{ github.repository }}
-                    done
-                    # --------------------------------
+              core.info(`Codacy issues fetched: ${issues.length}`);
+              return issues;
+            }
 
-                    gh issue edit "$existing_number" \
-                      --add-label "$label" \
-                      --body-file "$tmpfile" \
-                      --repo ${{ github.repository }}
-                else
-                    echo "[DRY RUN] Would update issue #$existing_number"
-                fi
-            else
-                echo "Creating new issue for Codacy ID $id"
-                if [ "$DRY_RUN" != "true" ]; then
-                  gh issue create \
-                    --title "$title" \
-                    --label "$label" \
-                    --body-file "$tmpfile" \
-                    --repo ${{ github.repository }}
-                else
-                  echo "[DRY RUN] Would create new issue"
-                fi
-            fi
+            // ── 2. Ensure required labels exist in the target repository ─────────────
+            async function ensureLabels() {
+              const labelDefs = [
+                { name: 'codacy',      color: '0075ca', description: 'Issue synced from Codacy' },
+                { name: 'bug',         color: 'b60205', description: 'Bugs and error-prone code' },
+                { name: 'security',    color: 'd93f0b', description: 'Security-related issues' },
+                { name: 'performance', color: 'e57504', description: 'Performance optimization issues' },
+                { name: 'refactor',    color: 'eb69a2', description: 'Code cleanup and best practices' },
+                { name: 'task',        color: '0e8a16', description: 'Tasks and work items' },
+              ];
 
-            rm "$tmpfile"
-          done
+              for (const def of labelDefs) {
+                try {
+                  await github.rest.issues.getLabel({ owner, repo, name: def.name });
+                } catch (err) {
+                  if (err.status === 404) {
+                    if (!dryRun) {
+                      try {
+                        await github.rest.issues.createLabel({ owner, repo, ...def });
+                        core.info(`Created label: ${def.name}`);
+                      } catch (createErr) {
+                        core.warning(`Could not create label '${def.name}': ${createErr.message}`);
+                      }
+                    }
+                  }
+                }
+              }
+            }
 
-      # STEP 4: Close resolved issues
-      - name: Close resolved issues
-        env:
-          GH_TOKEN: ${{ secrets.GH_TOKEN }}
-          DRY_RUN: ${{ inputs.dry_run }}
-        run: |
-          # List ALL open GitHub issues
-          gh issue list --limit 5000 --state open --repo ${{ github.repository }} --json number,body \
-            | jq -c '.[]' \
-            | while read -r issue; do
+            // ── 3. Load all GitHub issues already managed by this workflow ───────────
+            // Looks for the hidden dedupe marker in both open and closed issues
+            // tagged with the 'codacy' label, so we never create duplicates.
+            async function loadExistingIssues() {
+              const map = new Map(); // dedupeKey → issue object
 
-              number=$(echo "$issue" | jq -r '.number')
-              body=$(echo "$issue" | jq -r '.body')
+              for (const state of ['open', 'closed']) {
+                const issues = await github.paginate(
+                  github.rest.issues.listForRepo,
+                  { owner, repo, state, labels: 'codacy', per_page: 100 },
+                );
+                for (const issue of issues) {
+                  const match = issue.body?.match(/<!--\s*codacy-dedupe:([^\s>]+)\s*-->/);
+                  if (match) map.set(match[1], issue);
+                }
+              }
 
-              # Extract reliable Codacy ID via hidden tag
-              id=$(echo "$body" | sed -n 's/.*CODACY-ID:\([a-zA-Z0-9_-]\+\).*/\1/p')
+              core.info(`Existing Codacy-synced issues loaded: ${map.size}`);
+              return map;
+            }
 
-              [ -z "$id" ] && continue
+            // ── 4. Map Codacy category → GitHub label ────────────────────────────────
+            function categoryToLabel(category, message) {
+              const cat = (category || '').toLowerCase();
+              const msg = (message  || '').toLowerCase();
 
-              # Check if ID exists in latest Codacy report
-              if ! jq -r '.data[].issueId' codacy_issues.json | grep -q "$id"; then
-                echo "Closing stale issue #$number (ID=$id)"
-                if [ "$DRY_RUN" != "true" ]; then
-                  gh issue close "$number" \
-                    --comment "This issue no longer appears in Codacy reports and has been auto-closed." \
-                    --repo ${{ github.repository }}
-                else
-                  echo "[DRY RUN] Would close #$number"
-                fi
-              fi
-            done
+              if (msg.includes('todo'))                                                              return 'task';
+              if (/security/.test(cat))                                                             return 'security';
+              if (/performance/.test(cat))                                                          return 'performance';
+              if (/(bug|error|errorprone|error[._-]prone)/.test(cat))                              return 'bug';
+              if (/(refactor|best[._-]?practice|code[._-]?style|complexity|unused[._-]?code)/.test(cat)) return 'refactor';
+              return null;
+            }
+
+            // ── 5. Build the GitHub issue body ───────────────────────────────────────
+            // The hidden HTML comment `<!-- codacy-dedupe:<key> -->` MUST stay at the
+            // very top of the body – it is used by the duplicate detection logic.
+            function buildBody(issue, dedupeKey) {
+              const {
+                issueId    = '',
+                filePath   = 'Unknown',
+                lineNumber = 0,
+                message    = '',
+                patternInfo = {},
+                commitInfo  = {},
+                lineText,
+              } = issue;
+
+              const category  = patternInfo.category      || 'Unknown';
+              const severity  = patternInfo.severityLevel || 'Unknown';
+              const sha       = commitInfo.sha            || 'Unknown';
+              const tool      = patternInfo.patternId?.tool || '';
+              const patternId = patternInfo.patternId?.id   || '';
+              const rule      = patternId ? `${tool}/${patternId}` : category;
+              const codacyFileUrl = filePath && filePath !== 'Unknown'
+                ? `https://app.codacy.com/gh/${codacyOrg}/${codacyRepo}/file?filename=${encodeURIComponent(filePath)}`
+                : `https://app.codacy.com/gh/${codacyOrg}/${codacyRepo}/issues`;
+
+              let body =
+                `<!-- codacy-dedupe:${dedupeKey} -->\n\n` +
+                `**Codacy Issue ID:** \`${issueId}\`\n\n` +
+                `| Field | Value |\n| --- | --- |\n` +
+                `| **File** | \`${filePath}\` |\n` +
+                `| **Line** | ${lineNumber} |\n` +
+                `| **Rule** | ${rule} |\n` +
+                `| **Severity** | ${severity} |\n` +
+                `| **Commit** | \`${sha}\` |\n\n` +
+                `**Message:** ${message}\n\n` +
+                `\u{1F517} [View file in Codacy](${codacyFileUrl})\n`;
+
+              if (lineText && lineText.trim()) {
+                body += `\n**Code Snippet:**\n\`\`\`\n${lineText.replace(/\r/g, '').trim()}\n\`\`\`\n`;
+              }
+
+              return body;
+            }
+
+            // ── Main sync logic ──────────────────────────────────────────────────────
+            const [codacyIssues, existingMap] = await Promise.all([
+              fetchCodacyIssues(),
+              ensureLabels().then(() => loadExistingIssues()),
+            ]);
+
+            const activeKeys = new Set();
+            const stats = { created: 0, updated: 0, reopened: 0, closed: 0, skipped: 0 };
+
+            for (const ci of codacyIssues) {
+              const dedupeKey = ci.issueId;
+              if (!dedupeKey) {
+                core.warning('Skipping Codacy issue with no issueId');
+                continue;
+              }
+
+              activeKeys.add(dedupeKey);
+
+              const category = ci.patternInfo?.category || 'Unknown';
+              const message  = ci.message || '';
+              const title    = `[Codacy/${category}] ${message}`;
+              const body     = buildBody(ci, dedupeKey);
+              const catLabel = categoryToLabel(category, message);
+              const labels   = catLabel
+                ? ['codacy', catLabel, ...extraLabels]
+                : ['codacy', ...extraLabels];
+
+              const existing = existingMap.get(dedupeKey);
+
+              if (existing) {
+                const isClosed     = existing.state === 'closed';
+                const titleChanged = existing.title !== title;
+                const bodyChanged  = existing.body  !== body;
+
+                if (isClosed || titleChanged || bodyChanged) {
+                  if (!dryRun) {
+                    const params = {
+                      owner, repo,
+                      issue_number: existing.number,
+                      title,
+                      body,
+                      state:  'open',
+                      labels,
+                    };
+                    if (assigneeList.length) params.assignees = assigneeList;
+                    await withRetry(() => github.rest.issues.update(params));
+                  }
+                  const verb = isClosed ? 'Reopened' : 'Updated';
+                  core.info(`${dryRun ? '[DRY RUN] Would reopen/update' : verb} issue #${existing.number} (Codacy ID: ${dedupeKey})`);
+                  isClosed ? stats.reopened++ : stats.updated++;
+                } else {
+                  core.debug(`Issue #${existing.number} already up-to-date (Codacy ID: ${dedupeKey})`);
+                  stats.skipped++;
+                }
+              } else {
+                if (!dryRun) {
+                  const params = { owner, repo, title, body, labels };
+                  if (assigneeList.length) params.assignees = assigneeList;
+                  const created = await withRetry(() => github.rest.issues.create(params));
+                  existingMap.set(dedupeKey, created.data);
+                  core.info(`Created issue #${created.data.number} for Codacy issue ${dedupeKey}`);
+                  await sleep(100); // avoid GitHub secondary-rate-limit bursts
+                } else {
+                  core.info(`[DRY RUN] Would create: ${title}`);
+                }
+                stats.created++;
+              }
+            }
+
+            // Close GitHub issues that are no longer reported by Codacy
+            for (const [key, issue] of existingMap.entries()) {
+              if (!activeKeys.has(key) && issue.state === 'open') {
+                if (!dryRun) {
+                  await withRetry(() => github.rest.issues.update({
+                    owner, repo,
+                    issue_number: issue.number,
+                    state: 'closed',
+                  }));
+                  await withRetry(() => github.rest.issues.createComment({
+                    owner, repo,
+                    issue_number: issue.number,
+                    body: '\u{1F916} This issue no longer appears in Codacy reports and has been automatically closed.',
+                  }));
+                  core.info(`Closed stale issue #${issue.number} (Codacy dedupe key: ${key})`);
+                } else {
+                  core.info(`[DRY RUN] Would close stale issue #${issue.number} (Codacy dedupe key: ${key})`);
+                }
+                stats.closed++;
+              }
+            }
+
+            core.info(
+              `\n\u2705 Sync complete \u2014 ` +
+              `created: ${stats.created}, updated: ${stats.updated}, ` +
+              `reopened: ${stats.reopened}, closed: ${stats.closed}, ` +
+              `skipped (no change): ${stats.skipped}`,
+            );
