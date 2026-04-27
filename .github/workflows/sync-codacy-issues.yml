@@ -35,7 +35,7 @@ on:
           Valid values: Error, Warning, Info.
         required: false
         type: string
-        default: "Error,Warning,Info"
+        default: "Error,High,Warning,Info"
 
       extra_labels:
         description: >
@@ -96,7 +96,7 @@ jobs:
             const codacyRepo   = process.env.CODACY_REPO_INPUT || context.repo.repo;
             const extraLabels  = (process.env.EXTRA_LABELS  || '').split(',').map(s => s.trim()).filter(Boolean);
             const assigneeList = (process.env.ASSIGNEES     || '').split(',').map(s => s.trim()).filter(Boolean);
-            const severities   = (process.env.SEVERITY_FILTER || 'Error,Warning,Info')
+            const severities   = (process.env.SEVERITY_FILTER || 'Error,High,Warning,Info')
                                     .split(',').map(s => s.trim()).filter(Boolean);
 
             const { owner, repo } = context.repo;
