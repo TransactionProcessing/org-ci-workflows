@@ -197,6 +197,10 @@ jobs:
                 issues.push(...page);
                 core.info(`  Fetched page: ${page.length} issues (running total: ${issues.length})`);
 
+                // Stop if the page is empty – some API versions return a cursor
+                // even on the last page, which would otherwise cause an infinite loop.
+                if (page.length === 0) break;
+
                 cursor = response.pagination?.cursor || undefined;
                 if (cursor) await sleep(200); // courtesy pause between pages
               } while (cursor);
