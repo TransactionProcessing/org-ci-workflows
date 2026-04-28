@@ -182,6 +182,7 @@ jobs:
             async function fetchCodacyIssues() {
               const issues = [];
               let cursor;
+              let prevCursor;
               const limit   = 100;
               const apiPath = `/api/v3/analysis/organizations/gh/${codacyOrg}/repositories/${codacyRepo}/issues/search`;
 
@@ -197,11 +198,20 @@ jobs:
                 issues.push(...page);
                 core.info(`  Fetched page: ${page.length} issues (running total: ${issues.length})`);
 
-                // Stop if the page is empty – some API versions return a cursor
-                // even on the last page, which would otherwise cause an infinite loop.
-                if (page.length === 0) break;
+                // Stop if the page is empty or smaller than the requested limit –
+                // a partial page means there are no further pages to fetch.
+                if (page.length < limit) break;
 
+                prevCursor = cursor;
                 cursor = response.pagination?.cursor || undefined;
+
+                // Guard against the API echoing the same cursor, which would cause
+                // an infinite loop even when all results have already been returned.
+                if (cursor && cursor === prevCursor) {
+                  core.warning('Codacy API returned the same cursor twice – stopping pagination to avoid an infinite loop.');
+                  break;
+                }
+
                 if (cursor) await sleep(200); // courtesy pause between pages
               } while (cursor);
 
