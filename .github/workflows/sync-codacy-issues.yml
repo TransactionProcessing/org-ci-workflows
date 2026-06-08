@@ -65,6 +65,10 @@ jobs:
     name: Sync Codacy → GitHub Issues
     runs-on: ubuntu-latest
 
+    concurrency:
+      group: codacy-sync-${{ github.repository }}
+      cancel-in-progress: false
+
     # Minimal required permissions – GITHUB_TOKEN of the calling repo is used
     # for all GitHub Issues CRUD operations.
     permissions:
@@ -89,7 +93,7 @@ jobs:
           script: |
             const https = require('https');
 
-            // ── Configuration ───────────────────────────────────────────────────────
+            // ── Configuration ──────────────────────────────────────────────────────
             const codacyToken  = process.env.CODACY_API_TOKEN;
             const dryRun       = process.env.DRY_RUN === 'true';
             const codacyOrg    = process.env.CODACY_ORG_INPUT  || context.repo.owner;
@@ -111,7 +115,7 @@ jobs:
             core.info(`Severities   : ${severities.join(', ')}`);
             core.info(`Dry run      : ${dryRun}`);
 
-            // ── Helpers ─────────────────────────────────────────────────────────────
+            // ── Helpers ────────────────────────────────────────────────────────
             const sleep = ms => new Promise(r => setTimeout(r, ms));
 
             /**
@@ -269,6 +273,15 @@ jobs:
               return map;
             }
 
+            async function findExistingIssueByDedupeKey(dedupeKey) {
+              const issues = await github.paginate(
+                github.rest.issues.listForRepo,
+                { owner, repo, state: 'all', labels: 'codacy', per_page: 100 },
+              );
+
+              return issues.find(issue => issue.body?.includes(`<!-- codacy-dedupe:${dedupeKey} -->`));
+            }
+
             // ── 4. Map Codacy category → GitHub label ────────────────────────────────
             function categoryToLabel(category, message) {
               const cat = (category || '').toLowerCase();
@@ -352,7 +365,14 @@ jobs:
                 ? ['codacy', catLabel, ...extraLabels]
                 : ['codacy', ...extraLabels];
 
-              const existing = existingMap.get(dedupeKey);
+              let existing = existingMap.get(dedupeKey);
+
+              if (!existing) {
+                existing = await findExistingIssueByDedupeKey(dedupeKey);
+                if (existing) {
+                  existingMap.set(dedupeKey, existing);
+                }
+              }
 
               if (existing) {
                 const isClosed     = existing.state === 'closed';
@@ -417,7 +437,7 @@ jobs:
             }
 
             core.info(
-              `\n\u2705 Sync complete \u2014 ` +
+              `\n\u2705 Sync complete — ` +
               `created: ${stats.created}, updated: ${stats.updated}, ` +
               `reopened: ${stats.reopened}, closed: ${stats.closed}, ` +
               `skipped (no change): ${stats.skipped}`,
