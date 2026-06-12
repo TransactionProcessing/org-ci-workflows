@@ -192,7 +192,7 @@ jobs:
 
             const active = new Set(codacyIssues.map(x => x.issueId));
 
-            const stats = { created: 0, updated: 0, closed: 0 };
+            const stats = { created: 0, updated: 0, closed: 0, cleaned: 0 };
 
             // CREATE / UPDATE
             for (const ci of codacyIssues) {
@@ -201,12 +201,11 @@ jobs:
               const title = `[Codacy] ${ci.message}`;
               const body = buildBody(ci);
 
-              const label = makeLabel(id);
               const existing = existingMap.get(id);
 
               const labels = [
                 "codacy",
-                label,
+                makeLabel(id),
                 mapSeverity(ci.patternInfo),
                 ...extraLabels
               ];
@@ -244,27 +243,57 @@ jobs:
               }
             }
 
-            // CLOSE STALE
+            // CLOSE + CLEANUP (single pass, no extra API calls)
             for (const [id, issue] of existingMap.entries()) {
-              if (!active.has(id)) {
-                if (!dryRun) {
+
+              if (active.has(id)) continue;
+
+              const hasCodacyLabel =
+                (issue.labels || []).some(l =>
+                  l.name.startsWith("codacy:")
+                );
+
+              if (!dryRun) {
+
+                await github.rest.issues.update({
+                  owner,
+                  repo,
+                  issue_number: issue.number,
+                  state: "closed"
+                });
+
+                await github.rest.issues.createComment({
+                  owner,
+                  repo,
+                  issue_number: issue.number,
+                  body: [
+                    "🤖 Auto-closed: no longer present in Codacy report.",
+                    "",
+                    `Last Codacy issueId: ${id}`
+                  ].join("\n")
+                });
+
+                // remove ONLY codacy:<id>, keep general "codacy"
+                if (hasCodacyLabel) {
+                  const remainingLabels = (issue.labels || [])
+                    .map(l => l.name)
+                    .filter(name =>
+                      name !== "codacy" &&
+                      !name.startsWith("codacy:")
+                    );
+
                   await github.rest.issues.update({
                     owner,
                     repo,
                     issue_number: issue.number,
-                    state: "closed"
+                    labels: remainingLabels
                   });
 
-                  await github.rest.issues.createComment({
-                    owner,
-                    repo,
-                    issue_number: issue.number,
-                    body: "Auto-closed: no longer present in Codacy report."
-                  });
+                  stats.cleaned++;
                 }
-
-                stats.closed++;
               }
+
+              stats.closed++;
             }
 
             console.log(stats);
