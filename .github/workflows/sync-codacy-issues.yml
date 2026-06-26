@@ -188,8 +188,56 @@ jobs:
               )?.trim();
             }
 
+            function getSnippetLanguage(filePath) {
+              const ext = (filePath || "").split(".").pop()?.toLowerCase();
+              const map = {
+                js: "javascript",
+                jsx: "javascript",
+                mjs: "javascript",
+                cjs: "javascript",
+                ts: "typescript",
+                tsx: "typescript",
+                py: "python",
+                rb: "ruby",
+                go: "go",
+                java: "java",
+                kt: "kotlin",
+                kts: "kotlin",
+                rs: "rust",
+                php: "php",
+                sh: "bash",
+                bash: "bash",
+                zsh: "bash",
+                ps1: "powershell",
+                yml: "yaml",
+                yaml: "yaml",
+                json: "json",
+                md: "markdown",
+                html: "html",
+                htm: "html",
+                css: "css",
+                scss: "scss",
+                sql: "sql",
+                xml: "xml",
+                scala: "scala",
+                cs: "csharp",
+                cpp: "cpp",
+                cxx: "cpp",
+                cc: "cpp",
+                h: "c",
+                hpp: "cpp",
+                swift: "swift",
+                dart: "dart",
+                lua: "lua",
+                toml: "toml"
+              };
+
+              return map[ext] || "";
+            }
+
             function buildBody(ci) {
               const snippet = getCodeSnippet(ci);
+              const snippetLanguage = getSnippetLanguage(ci.filePath);
 
               const body = [
                 `**Codacy Issue ID:** ${ci.issueId}`,
@@ -205,12 +253,16 @@ jobs:
               ];
 
               if (snippet) {
-                body.push("", "Code snippet:", "```", snippet, "```");
+                body.push(
+                  "",
+                  "Code snippet:",
+                  `\`\`\`${snippetLanguage}`,
+                  snippet,
+                  "```"
+                );
               }
 
-              return [
-                ...body
-              ].join("\n");
+              return body.join("\n");
             }
 
             // ─────────────────────────────────────────────
