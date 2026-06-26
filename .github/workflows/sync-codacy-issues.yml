@@ -59,6 +59,7 @@ jobs:
           github-token: ${{ github.token }}
           script: |
             const https = require('https');
+            const path = require('path');
 
             const token = process.env.CODACY_API_TOKEN;
             const dryRun = process.env.DRY_RUN === 'true';
@@ -189,14 +190,10 @@ jobs:
             }
 
             function getSnippetLanguage(filePath) {
-              const fileName = (filePath || "").split("/").pop() || "";
+              const fileName = path.basename(filePath || "");
               const dotIndex = fileName.lastIndexOf(".");
 
-              if (dotIndex < 0 || dotIndex === fileName.length - 1) {
-                return "";
-              }
-
-              if (fileName.startsWith(".") && dotIndex === 0) {
+              if (dotIndex <= 0 || dotIndex === fileName.length - 1) {
                 return "";
               }
 
