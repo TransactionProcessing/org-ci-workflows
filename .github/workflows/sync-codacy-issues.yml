@@ -192,7 +192,11 @@ jobs:
               const fileName = (filePath || "").split("/").pop() || "";
               const dotIndex = fileName.lastIndexOf(".");
 
-              if (dotIndex <= 0 || dotIndex === fileName.length - 1) {
+              if (dotIndex < 0 || dotIndex === fileName.length - 1) {
+                return "";
+              }
+
+              if (fileName.startsWith(".") && dotIndex === 0) {
                 return "";
               }
 
