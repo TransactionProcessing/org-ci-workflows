@@ -184,12 +184,19 @@ jobs:
               ];
 
               return candidates.find(
-                value => typeof value === "string" && value.trim()
+                value => typeof value === "string" && value.trim().length > 0
               )?.trim();
             }
 
             function getSnippetLanguage(filePath) {
-              const ext = (filePath || "").split(".").pop()?.toLowerCase();
+              const fileName = (filePath || "").split("/").pop() || "";
+              const dotIndex = fileName.lastIndexOf(".");
+
+              if (dotIndex <= 0 || dotIndex === fileName.length - 1) {
+                return "";
+              }
+
+              const ext = fileName.slice(dotIndex + 1).toLowerCase();
               const map = {
                 js: "javascript",
                 jsx: "javascript",
