@@ -170,9 +170,30 @@ jobs:
               return "codacy";
             }
 
+            function buildCodacyIssueUrl(ci) {
+              return `https://app.codacy.com/gh/${org}/${repoName}/issues/${ci.issueId}`;
+            }
+
+            function getCodeSnippet(ci) {
+              const candidates = [
+                ci.codeSnippet,
+                ci.snippet,
+                ci.patternInfo?.codeSnippet,
+                ci.location?.codeSnippet,
+                ci.location?.snippet
+              ];
+
+              return candidates.find(
+                value => typeof value === "string" && value.trim()
+              )?.trim();
+            }
+
             function buildBody(ci) {
-              return [
+              const snippet = getCodeSnippet(ci);
+
+              const body = [
                 `**Codacy Issue ID:** ${ci.issueId}`,
+                `**Codacy Issue:** ${buildCodacyIssueUrl(ci)}`,
                 "",
                 `File: ${ci.filePath}`,
                 `Line: ${ci.lineNumber}`,
@@ -181,6 +202,14 @@ jobs:
                 "",
                 `Rule: ${ci.patternInfo?.id || "unknown"}`,
                 `Severity: ${ci.patternInfo?.severityLevel || "unknown"}`
+              ];
+
+              if (snippet) {
+                body.push("", "Code snippet:", "```", snippet, "```");
+              }
+
+              return [
+                ...body
               ].join("\n");
             }
 
