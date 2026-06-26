@@ -1,84 +1,51 @@
-# Sync Codacy Issues → GitHub Issues
+# Sync Codacy Issues -> GitHub Issues
 
-The reusable workflow `sync-codacy-issues.yml` fetches code-quality findings from [Codacy](https://app.codacy.com) and mirrors them as GitHub Issues in the calling repository.  
-It handles full lifecycle management: **create**, **update**, **reopen**, and **close** GitHub issues as Codacy findings appear or disappear.
+The reusable workflow `sync-codacy-issues.yml` fetches code-quality findings from [Codacy](https://app.codacy.com) and mirrors them as GitHub Issues in the calling repository.
 
----
-
-## Table of Contents
-
-- [How it works](#how-it-works)
-- [Quick start – per-repo caller workflow](#quick-start--per-repo-caller-workflow)
-- [Required secrets](#required-secrets)
-- [Inputs reference](#inputs-reference)
-- [Permissions](#permissions)
-- [Duplicate protection (dedupe)](#duplicate-protection-dedupe)
-- [Labels used](#labels-used)
-- [Sync behaviour in detail](#sync-behaviour-in-detail)
-- [Troubleshooting](#troubleshooting)
+It now uses a Neon Postgres database as the source of truth for sync state, so duplicate detection does not depend on issue labels or hidden body markers.
 
 ---
 
 ## How it works
 
+```text
+Calling repository
+  .github/workflows/codacy-sync.yml
+        |
+        v
+Reusable workflow
+  .github/workflows/sync-codacy-issues.yml
+        |
+        +--> Codacy API: fetch current findings
+        +--> Neon Postgres: read/write sync rows
+        +--> GitHub Issues API: create, update, reopen, close
 ```
- ┌─────────────────────────────────────────────────────┐
- │ Calling repository (e.g. MyOrg/my-service)          │
- │  .github/workflows/codacy-sync.yml  (tiny caller)  │
- └──────────────────┬──────────────────────────────────┘
-                    │  workflow_call  (secrets: inherit)
-                    ▼
- ┌─────────────────────────────────────────────────────────────────┐
- │ TransactionProcessing/org-ci-workflows                          │
- │  .github/workflows/sync-codacy-issues.yml  (reusable workflow) │
- │                                                                 │
- │  1. POST /api/v3/.../issues/search  → Codacy API (paginated)   │
- │  2. Ensure labels exist in calling repo                         │
- │  3. Load existing issues (open + closed) tagged `codacy`        │
- │  4. For each Codacy finding:                                    │
- │       • NEW  → create GitHub issue                              │
- │       • CHANGED / CLOSED → update / reopen GitHub issue         │
- │       • NO LONGER IN CODACY → close GitHub issue               │
- └─────────────────────────────────────────────────────────────────┘
-```
+
+For each finding, the workflow:
+
+1. Looks up the finding in Neon using the composite key:
+   - `github_repository`
+   - `codacy_org`
+   - `codacy_repo`
+   - `codacy_issue_id`
+2. Creates the GitHub issue only if no row exists.
+3. Updates or reopens the existing GitHub issue if the finding still exists.
+4. Closes the GitHub issue and marks the row inactive when Codacy no longer reports it.
+
+The first successful run bootstraps any previously created Codacy issues from the target repo into Neon, so the migration from the old label-based approach is automatic.
 
 ---
 
-## Quick start – per-repo caller workflow
+## Quick start
 
-Copy the file [`docs/examples/caller-codacy-sync.yml`](examples/caller-codacy-sync.yml) to `.github/workflows/codacy-sync.yml` in your repository and commit it.  
-No other changes are required in the target repository.
+Copy [`docs/examples/caller-codacy-sync.yml`](examples/caller-codacy-sync.yml) to `.github/workflows/codacy-sync.yml` in your repository.
 
-```yaml
-# .github/workflows/codacy-sync.yml  (place this in YOUR repository)
-name: Codacy Issue Sync
+You must provide:
 
-on:
-  schedule:
-    - cron: "0 6 * * 1-5"   # 06:00 UTC, Monday – Friday
-  workflow_dispatch:          # allow manual trigger
+- `CODACY_API_TOKEN` as an organisation secret
+- `NEON_DATABASE_URL` as a secret pointing at your Neon Postgres database
 
-jobs:
-  sync:
-    uses: TransactionProcessing/org-ci-workflows/.github/workflows/sync-codacy-issues.yml@main
-    secrets: inherit          # forwards CODACY_API_TOKEN org secret automatically
-```
-
-To customise further, pass optional inputs:
-
-```yaml
-jobs:
-  sync:
-    uses: TransactionProcessing/org-ci-workflows/.github/workflows/sync-codacy-issues.yml@main
-    secrets: inherit
-    with:
-      codacy_org:      "MyOrg"           # Codacy org slug (default: GitHub owner)
-      codacy_repo:     "my-service"      # Codacy repo slug (default: GitHub repo name)
-      severity_filter: "Error,Warning"   # omit Info-level issues
-      extra_labels:    "needs-triage"    # add a custom label to every synced issue
-      assignees:       "alice,bob"       # auto-assign to team members
-      dry_run:         false             # set to true to preview without writing
-```
+The caller can keep using `secrets: inherit` if both secrets are available to that repository.
 
 ---
 
@@ -86,13 +53,8 @@ jobs:
 
 | Secret | Where to set | Notes |
 | --- | --- | --- |
-| `CODACY_API_TOKEN` | GitHub **Organisation** secret | Read-only Codacy API token. Created under *Codacy → Organisation → Integrations → API tokens*. Needs at minimum **read** access to repositories. |
-
-Because the caller uses `secrets: inherit`, the org-level secret is automatically forwarded to the reusable workflow.  
-No repository-level secret configuration is needed in the calling repo.
-
-> **Note:** `GITHUB_TOKEN` is used automatically for all GitHub Issues API calls.  
-> No additional GitHub token secret is required.
+| `CODACY_API_TOKEN` | GitHub organisation secret | Read-only Codacy API token with access to the target Codacy repository. |
+| `NEON_DATABASE_URL` | GitHub organisation secret or repository secret | Neon Postgres connection string, typically from the Neon console. |
 
 ---
 
@@ -100,105 +62,87 @@ No repository-level secret configuration is needed in the calling repo.
 
 | Input | Type | Required | Default | Description |
 | --- | --- | --- | --- | --- |
-| `codacy_org` | `string` | No | GitHub repo owner | Codacy organisation slug exactly as shown in the Codacy URL: `https://app.codacy.com/gh/<codacy_org>/...` |
-| `codacy_repo` | `string` | No | GitHub repo name | Codacy repository slug exactly as shown in the Codacy URL: `https://app.codacy.com/gh/<org>/<codacy_repo>/...` |
-| `severity_filter` | `string` | No | `"Error,Warning,Info"` | Comma-separated list of Codacy severity levels to include. Valid values: `Error`, `Warning`, `Info`. |
-| `extra_labels` | `string` | No | `""` | Comma-separated list of additional labels to apply to every synced issue (in addition to the always-present `codacy` label and the auto-detected category label). |
-| `assignees` | `string` | No | `""` | Comma-separated GitHub usernames to assign to every newly created issue. |
-| `dry_run` | `boolean` | No | `false` | When `true`, log all planned actions without making any changes to GitHub issues. Useful for testing. |
+| `codacy_org` | `string` | No | GitHub repo owner | Codacy organisation slug. |
+| `codacy_repo` | `string` | No | GitHub repo name | Codacy repository slug. |
+| `severity_filter` | `string` | No | `"Error,High,Warning,Info"` | Comma-separated Codacy severity levels to include. |
+| `extra_labels` | `string` | No | `""` | Optional labels to add to synced issues. These are metadata only and are not used for dedupe. |
+| `assignees` | `string` | No | `""` | GitHub usernames to assign to newly created issues. |
+| `dry_run` | `boolean` | No | `false` | When `true`, logs planned actions without mutating GitHub or Neon. |
 
 ---
 
-## Permissions
+## Neon schema
 
-The reusable workflow sets the following minimal permissions on `GITHUB_TOKEN`:
+The workflow creates one table:
 
-```yaml
-permissions:
-  issues: write    # create / update / close GitHub issues and labels
-  contents: read   # required by the runner environment
+```sql
+create table codacy_issue_sync (
+  github_repository text not null,
+  codacy_org text not null,
+  codacy_repo text not null,
+  codacy_issue_id text not null,
+  github_issue_number bigint not null,
+  active boolean not null default true,
+  first_seen_at timestamptz not null default now(),
+  last_seen_at timestamptz not null default now(),
+  closed_at timestamptz,
+  updated_at timestamptz not null default now(),
+  primary key (github_repository, codacy_org, codacy_repo, codacy_issue_id)
+);
 ```
 
-These are inherited from the **calling** repository's `GITHUB_TOKEN`.  
-Make sure the repository's *Settings → Actions → General → Workflow permissions* is set to **"Read and write permissions"** or that the calling workflow explicitly grants `issues: write`.
+This means one Neon database can safely track multiple GitHub repositories and multiple Codacy repository mappings at the same time.
 
 ---
 
-## Duplicate protection (dedupe)
+## Issue body
 
-Every GitHub issue created by this workflow contains a hidden HTML comment at the very top of the issue body:
+Each synced GitHub issue includes:
 
-```html
-<!-- codacy-dedupe:<codacy-issue-id> -->
-```
+- the Codacy issue link
+- GitHub repository name
+- Codacy org/repo
+- file path
+- line number
+- rule ID
+- severity
+- code snippet when Codacy provides one
+- a visible sync metadata block for humans
 
-where `<codacy-issue-id>` is the stable, unique ID assigned by Codacy to each finding.
-
-**Before creating any new issue**, the workflow:
-1. Lists **all** existing issues in the repository (both `open` and `closed`) that carry the `codacy` label.
-2. Parses the `<!-- codacy-dedupe:… -->` marker from each issue body.
-3. Builds an in-memory map of `dedupeKey → existing GitHub issue`.
-4. Only creates a new GitHub issue if the dedupe key is **not** already present in that map.
-
-This means:
-- Re-running the workflow never creates duplicates.
-- Manually closing a synced issue will cause it to be **reopened** on the next run if Codacy still reports the finding (see [sync behaviour](#sync-behaviour-in-detail)).
-- Manually deleting a synced issue **without** removing the label/marker will allow a fresh issue to be created on the next run.
+The workflow does not rely on hidden comments for identity.
 
 ---
 
-## Labels used
-
-The workflow creates and manages the following labels in the target repository (idempotent – existing labels are left unchanged):
-
-| Label | Colour | When applied |
-| --- | --- | --- |
-| `codacy` | Blue `#0075ca` | **All** issues created by this workflow (used for ownership tracking) |
-| `bug` | Red `#b60205` | Codacy category matches `bug`, `error`, `errorprone`, `error-prone` |
-| `security` | Dark-red `#d93f0b` | Codacy category matches `security` |
-| `performance` | Orange `#e57504` | Codacy category matches `performance` |
-| `refactor` | Pink `#eb69a2` | Codacy category matches `refactor`, `best-practice`, `code-style`, `complexity`, `unused-code` |
-| `task` | Green `#0e8a16` | Issue message contains the word `todo` |
-
-You can add further labels per run via the `extra_labels` input.
-
----
-
-## Sync behaviour in detail
-
-On each run the workflow reconciles the full set of Codacy findings against GitHub issues:
+## Sync behaviour
 
 | Situation | Action |
 | --- | --- |
-| Codacy finding exists, no matching GitHub issue | **Create** new GitHub issue |
-| Codacy finding exists, matching GitHub issue is **open** and unchanged | Skip (no change) |
-| Codacy finding exists, matching GitHub issue is **open** but title/body changed | **Update** the existing issue |
-| Codacy finding exists, matching GitHub issue is **closed** | **Reopen** and update the issue |
-| Codacy finding no longer reported, matching GitHub issue is **open** | **Close** the issue with an explanatory comment |
-| Codacy finding no longer reported, matching GitHub issue is **closed** | No action (already closed) |
+| Codacy finding exists, no database row exists | Create GitHub issue and insert Neon row |
+| Codacy finding exists, database row exists and GitHub issue is open | Update only if title/body/labels changed |
+| Codacy finding exists, database row exists and GitHub issue is closed | Reopen and update |
+| Codacy finding no longer reported, database row exists | Close GitHub issue and mark row inactive |
+| Codacy finding no longer reported, row already inactive | No action |
 
-The workflow **only manages issues it owns** (identified by the `codacy` label **and** the `<!-- codacy-dedupe:… -->` marker).  
-Hand-crafted issues or issues from other workflows are never touched.
+---
 
-Each synced issue body includes a direct link to the Codacy issue and, when available, the code snippet that Codacy reported.
+## Labels
+
+Labels are classification metadata only.
+
+The workflow creates and maintains a small managed label set, but labels are no longer used for identity or dedupe.
 
 ---
 
 ## Troubleshooting
 
-**`CODACY_API_TOKEN secret is not set`**  
-→ Ensure the `CODACY_API_TOKEN` secret exists at the **organisation** level in GitHub and that the calling repository has access to it (*Settings → Secrets and variables → Actions → Organisation secrets*).
-
-**`Codacy API responded with 404`**  
-→ The `codacy_org` / `codacy_repo` slugs do not match what Codacy expects.  
-Open `https://app.codacy.com/gh/<org>/<repo>/dashboard` and copy the exact slugs from the URL.
+**`Missing NEON_DATABASE_URL`**
+-> Add the Neon connection string as a secret and forward it to the reusable workflow.
 
 **`Codacy API responded with 401`**  
-→ The `CODACY_API_TOKEN` is invalid or has expired. Regenerate it in Codacy and update the secret.
+-> The `CODACY_API_TOKEN` is invalid or expired.
 
-**No issues created even though Codacy reports findings**  
-→ Run with `dry_run: true` first to inspect the planned actions in the workflow logs.  
-Also check `severity_filter` – the default includes `Error,Warning,Info` but the finding level in Codacy must exactly match one of the listed values (case-sensitive).
+**No issues are created even though Codacy reports findings**
+-> Check `severity_filter`, `codacy_org`, and `codacy_repo`.
 
-**GitHub issues are not being closed for resolved findings**  
-→ Confirm the old issues have the `codacy` label and contain the `<!-- codacy-dedupe:… -->` marker. Issues without the marker are ignored by the close step.
+**Existing issues were duplicated after switching to Neon**
+-> The bootstrap step could not parse the old issue body or labels. Confirm the previous issues still contain the Codacy ID in the body or `codacy:` label.
