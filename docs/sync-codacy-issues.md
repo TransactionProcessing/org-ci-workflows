@@ -180,6 +180,8 @@ On each run the workflow reconciles the full set of Codacy findings against GitH
 The workflow **only manages issues it owns** (identified by the `codacy` label **and** the `<!-- codacy-dedupe:… -->` marker).  
 Hand-crafted issues or issues from other workflows are never touched.
 
+Each synced issue body includes a direct link to the Codacy issue and, when available, the code snippet that Codacy reported.
+
 ---
 
 ## Troubleshooting

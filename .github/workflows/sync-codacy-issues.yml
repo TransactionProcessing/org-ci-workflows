@@ -59,6 +59,7 @@ jobs:
           github-token: ${{ github.token }}
           script: |
             const https = require('https');
+            const path = require('path');
 
             const token = process.env.CODACY_API_TOKEN;
             const dryRun = process.env.DRY_RUN === 'true';
@@ -170,9 +171,88 @@ jobs:
               return "codacy";
             }
 
+            function buildCodacyIssueUrl(ci) {
+              return `https://app.codacy.com/gh/${org}/${repoName}/issues/${ci.issueId}`;
+            }
+
+            function getCodeSnippet(ci) {
+              const candidates = [
+                ci.codeSnippet,
+                ci.snippet,
+                ci.patternInfo?.codeSnippet,
+                ci.location?.codeSnippet,
+                ci.location?.snippet
+              ];
+
+              return candidates.find(
+                value => typeof value === "string" && value.trim().length > 0
+              )?.trim();
+            }
+
+            function getSnippetLanguage(filePath) {
+              if (!filePath) {
+                return "";
+              }
+
+              const fileName = path.basename(filePath);
+              const ext = path.extname(fileName).slice(1).toLowerCase();
+
+              if (!ext) {
+                return "";
+              }
+
+              const map = {
+                js: "javascript",
+                jsx: "javascript",
+                mjs: "javascript",
+                cjs: "javascript",
+                ts: "typescript",
+                tsx: "typescript",
+                py: "python",
+                rb: "ruby",
+                go: "go",
+                java: "java",
+                kt: "kotlin",
+                kts: "kotlin",
+                rs: "rust",
+                php: "php",
+                sh: "bash",
+                bash: "bash",
+                zsh: "bash",
+                ps1: "powershell",
+                yml: "yaml",
+                yaml: "yaml",
+                json: "json",
+                md: "markdown",
+                html: "html",
+                htm: "html",
+                css: "css",
+                scss: "scss",
+                sql: "sql",
+                xml: "xml",
+                scala: "scala",
+                cs: "csharp",
+                cpp: "cpp",
+                cxx: "cpp",
+                cc: "cpp",
+                h: "c",
+                hpp: "cpp",
+                swift: "swift",
+                dart: "dart",
+                lua: "lua",
+                toml: "toml"
+              };
+
+              return map[ext] || "";
+            }
+
             function buildBody(ci) {
-              return [
+              const snippet = getCodeSnippet(ci);
+              const snippetLanguage = getSnippetLanguage(ci.filePath);
+
+              const body = [
                 `**Codacy Issue ID:** ${ci.issueId}`,
+                `**Codacy Issue:** ${buildCodacyIssueUrl(ci)}`,
                 "",
                 `File: ${ci.filePath}`,
                 `Line: ${ci.lineNumber}`,
@@ -181,7 +261,19 @@ jobs:
                 "",
                 `Rule: ${ci.patternInfo?.id || "unknown"}`,
                 `Severity: ${ci.patternInfo?.severityLevel || "unknown"}`
-              ].join("\n");
+              ];
+
+              if (snippet) {
+                body.push(
+                  "",
+                  "Code snippet:",
+                  `\`\`\`${snippetLanguage}`,
+                  snippet,
+                  "```"
+                );
+              }
+
+              return body.join("\n");
             }
 
             // ─────────────────────────────────────────────
