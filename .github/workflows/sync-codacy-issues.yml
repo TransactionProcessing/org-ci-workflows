@@ -27,9 +27,10 @@ on:
         required: false
         type: string
         default: ""
-
     secrets:
       CODACY_API_TOKEN:
+        required: true
+      NEON_DATABASE_URL:
         required: true
 
 jobs:
@@ -45,10 +46,19 @@ jobs:
       contents: read
 
     steps:
-      - name: Sync Codacy → GitHub
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install PostgreSQL client
+        run: npm install --no-save pg
+
+      - name: Sync Codacy -> GitHub
         uses: actions/github-script@v7
         env:
           CODACY_API_TOKEN: ${{ secrets.CODACY_API_TOKEN }}
+          NEON_DATABASE_URL: ${{ secrets.NEON_DATABASE_URL }}
           DRY_RUN: ${{ inputs.dry_run }}
           CODACY_ORG: ${{ inputs.codacy_org }}
           CODACY_REPO: ${{ inputs.codacy_repo }}
@@ -58,44 +68,66 @@ jobs:
         with:
           github-token: ${{ github.token }}
           script: |
-            const https = require('https');
-            const path = require('path');
+            const https = require("https");
+            const path = require("path");
+            const { Client } = require("pg");
 
             const token = process.env.CODACY_API_TOKEN;
-            const dryRun = process.env.DRY_RUN === 'true';
+            const dbUrl = process.env.NEON_DATABASE_URL;
+            const dryRun = process.env.DRY_RUN === "true";
 
             const org = process.env.CODACY_ORG || context.repo.owner;
             const repoName = process.env.CODACY_REPO || context.repo.repo;
+            const githubRepository = `${context.repo.owner}/${context.repo.repo}`;
 
             const extraLabels = (process.env.EXTRA_LABELS || "")
-              .split(',')
+              .split(",")
               .map(s => s.trim())
               .filter(Boolean);
 
             const assignees = (process.env.ASSIGNEES || "")
-              .split(',')
+              .split(",")
               .map(s => s.trim())
               .filter(Boolean);
 
             const severities = (process.env.SEVERITY_FILTER || "")
-              .split(',')
+              .split(",")
               .map(s => s.trim())
               .filter(Boolean);
 
-            const { owner, repo } = context.repo;
-
             if (!token) throw new Error("Missing CODACY_API_TOKEN");
+            if (!dbUrl) throw new Error("Missing NEON_DATABASE_URL");
 
-            // ─────────────────────────────────────────────
-            // Codacy API
-            // ─────────────────────────────────────────────
-            function codacyPost(path, body) {
+            const db = new Client({
+              connectionString: dbUrl,
+              ssl: { rejectUnauthorized: false }
+            });
+
+            const managedLabelDefinitions = [
+              { name: "codacy", color: "0075ca", description: "Managed by the Codacy issue sync workflow" },
+              { name: "bug", color: "d73a4a", description: "Codacy severity mapped to bug" },
+              { name: "warning", color: "fbca04", description: "Codacy severity mapped to warning" },
+              { name: "security", color: "d93f0b", description: "Codacy security finding" },
+              { name: "performance", color: "fbca04", description: "Codacy performance finding" },
+              { name: "refactor", color: "a2eeef", description: "Codacy refactor finding" }
+            ];
+
+            const managedLabelNames = new Set([
+              ...managedLabelDefinitions.map(label => label.name),
+              ...extraLabels
+            ]);
+
+            function uniq(values) {
+              return [...new Set(values.filter(Boolean))];
+            }
+
+            function codacyPost(apiPath, body) {
               return new Promise((resolve, reject) => {
                 const payload = JSON.stringify(body);
 
                 const req = https.request({
                   hostname: "app.codacy.com",
-                  path,
+                  path: apiPath,
                   method: "POST",
                   headers: {
                     "api-token": token,
@@ -105,13 +137,21 @@ jobs:
                 }, res => {
                   let data = "";
 
-                  res.on("data", c => data += c);
-
+                  res.on("data", chunk => data += chunk);
                   res.on("end", () => {
                     if (res.statusCode >= 200 && res.statusCode < 300) {
-                      return resolve(JSON.parse(data));
+                      if (!data) {
+                        return resolve({});
+                      }
+
+                      try {
+                        return resolve(JSON.parse(data));
+                      } catch (error) {
+                        return reject(new Error(`Unable to parse Codacy response: ${data}`));
+                      }
                     }
-                    reject(new Error(data));
+
+                    reject(new Error(`Codacy API responded with ${res.statusCode}: ${data}`));
                   });
                 });
 
@@ -123,52 +163,25 @@ jobs:
 
             async function fetchCodacyIssues() {
               const api = `/api/v3/analysis/organizations/gh/${org}/repositories/${repoName}/issues/search`;
+              const pageSize = 100;
+              const allIssues = [];
 
-              const res = await codacyPost(api, {
-                limit: 100,
-                levels: severities
-              });
+              for (let offset = 0; ; offset += pageSize) {
+                const response = await codacyPost(api, {
+                  limit: pageSize,
+                  offset,
+                  levels: severities
+                });
 
-              return res.data || [];
-            }
+                const page = response.data || [];
+                allIssues.push(...page);
 
-            // ─────────────────────────────────────────────
-            // GitHub helpers (SOURCE OF TRUTH = LABEL)
-            // ─────────────────────────────────────────────
-            async function getAllCodacyIssuesFromGitHub() {
-              const issues = await github.paginate(
-                github.rest.issues.listForRepo,
-                {
-                  owner,
-                  repo,
-                  state: "all",
-                  labels: "codacy",
-                  per_page: 100
+                if (page.length < pageSize) {
+                  break;
                 }
-              );
-
-              const map = new Map();
-
-              for (const issue of issues) {
-                const label = issue.labels.find(l => l.name.startsWith("codacy:"));
-                if (!label) continue;
-
-                const id = label.name.replace("codacy:", "");
-                map.set(id, issue);
               }
 
-              return map;
-            }
-
-            function makeLabel(issueId) {
-              return `codacy:${issueId}`;
-            }
-
-            function mapSeverity(p) {
-              const s = (p?.severityLevel || "").toLowerCase();
-              if (s.includes("high") || s.includes("error")) return "bug";
-              if (s.includes("warning")) return "warning";
-              return "codacy";
+              return allIssues;
             }
 
             function buildCodacyIssueUrl(ci) {
@@ -184,9 +197,7 @@ jobs:
                 ci.location?.snippet
               ];
 
-              return candidates.find(
-                value => typeof value === "string" && value.trim().length > 0
-              )?.trim();
+              return candidates.find(value => typeof value === "string" && value.trim().length > 0)?.trim();
             }
 
             function getSnippetLanguage(filePath) {
@@ -246,146 +257,494 @@ jobs:
               return map[ext] || "";
             }
 
+            function getCodacyIssueIdFromText(text) {
+              if (!text) {
+                return "";
+              }
+
+              const patterns = [
+                /<!--\s*codacy-dedupe:\s*([^>\s]+)\s*-->/i,
+                /Codacy Issue ID:\s*`?([^\n`<]+)`?/i,
+                /Codacy issue ID:\s*`?([^\n`<]+)`?/i,
+                /Last Codacy issueId:\s*([^\n`<]+)\s*/i,
+                /Sync key:\s*`?[^`]*::([^`\n<]+)`?/i
+              ];
+
+              for (const pattern of patterns) {
+                const match = text.match(pattern);
+                if (match?.[1]) {
+                  return match[1].trim();
+                }
+              }
+
+              return "";
+            }
+
+            function getCodacyIssueIdFromLabels(labels = []) {
+              const label = labels.find(item => item?.name?.startsWith("codacy:"));
+              return label?.name?.replace("codacy:", "") || "";
+            }
+
+            function getCodacyIssueIdFromIssue(issue) {
+              return (
+                getCodacyIssueIdFromText(issue.body) ||
+                getCodacyIssueIdFromLabels(issue.labels) ||
+                ""
+              );
+            }
+
+            function mapSeverity(p) {
+              const s = (p?.severityLevel || "").toLowerCase();
+              if (s.includes("high") || s.includes("error")) return "bug";
+              if (s.includes("warning")) return "warning";
+              if (s.includes("security")) return "security";
+              if (s.includes("performance")) return "performance";
+              if (s.includes("refactor")) return "refactor";
+              return "codacy";
+            }
+
             function buildBody(ci) {
               const snippet = getCodeSnippet(ci);
               const snippetLanguage = getSnippetLanguage(ci.filePath);
+              const labels = [
+                `- Repository: \`${githubRepository}\``,
+                `- Codacy org: \`${org}\``,
+                `- Codacy repo: \`${repoName}\``,
+                `- Codacy issue ID: \`${ci.issueId}\``,
+                `- Codacy issue: ${buildCodacyIssueUrl(ci)}`,
+                `- File: \`${ci.filePath || "unknown"}\``,
+                `- Line: ${ci.lineNumber ?? "unknown"}`,
+                `- Rule: \`${ci.patternInfo?.id || "unknown"}\``,
+                `- Severity: \`${ci.patternInfo?.severityLevel || "unknown"}\``
+              ];
 
               const body = [
-                `**Codacy Issue ID:** ${ci.issueId}`,
-                `**Codacy Issue:** ${buildCodacyIssueUrl(ci)}`,
+                "## Codacy finding",
                 "",
-                `File: ${ci.filePath}`,
-                `Line: ${ci.lineNumber}`,
+                ...labels,
                 "",
-                `Message: ${ci.message}`,
-                "",
-                `Rule: ${ci.patternInfo?.id || "unknown"}`,
-                `Severity: ${ci.patternInfo?.severityLevel || "unknown"}`
+                `**Message:** ${ci.message || "No message supplied by Codacy"}`
               ];
 
               if (snippet) {
                 body.push(
                   "",
-                  "Code snippet:",
+                  "<details>",
+                  "<summary>Code snippet</summary>",
+                  "",
                   `\`\`\`${snippetLanguage}`,
                   snippet,
-                  "```"
+                  "```",
+                  "",
+                  "</details>"
                 );
               }
+
+              body.push(
+                "",
+                "<details>",
+                "<summary>Sync metadata</summary>",
+                "",
+                `Sync key: \`${githubRepository}::${org}/${repoName}::${ci.issueId}\``,
+                "</details>"
+              );
 
               return body.join("\n");
             }
 
-            // ─────────────────────────────────────────────
-            // Main
-            // ─────────────────────────────────────────────
-            const codacyIssues = await fetchCodacyIssues();
-            const existingMap = await getAllCodacyIssuesFromGitHub();
-
-            const active = new Set(codacyIssues.map(x => x.issueId));
-
-            const stats = { created: 0, updated: 0, closed: 0, cleaned: 0 };
-
-            // CREATE / UPDATE
-            for (const ci of codacyIssues) {
-              const id = ci.issueId;
-
-              const title = `[Codacy] ${ci.message}`;
-              const body = buildBody(ci);
-
-              const existing = existingMap.get(id);
-
-              const labels = [
+            function buildLabels(ci) {
+              return uniq([
                 "codacy",
-                makeLabel(id),
                 mapSeverity(ci.patternInfo),
                 ...extraLabels
-              ];
+              ]);
+            }
 
-              if (!existing) {
+            function mergeLabels(existingLabels, desiredLabels) {
+              const existingNames = (existingLabels || []).map(label => label.name || label);
+              const preserved = existingNames.filter(name => !managedLabelNames.has(name));
+              return uniq([...preserved, ...desiredLabels]);
+            }
+
+            async function ensureSchema() {
+              await db.query(`
+                create table if not exists codacy_issue_sync (
+                  github_repository text not null,
+                  codacy_org text not null,
+                  codacy_repo text not null,
+                  codacy_issue_id text not null,
+                  github_issue_number bigint not null,
+                  active boolean not null default true,
+                  first_seen_at timestamptz not null default now(),
+                  last_seen_at timestamptz not null default now(),
+                  closed_at timestamptz,
+                  updated_at timestamptz not null default now(),
+                  primary key (github_repository, codacy_org, codacy_repo, codacy_issue_id)
+                );
+              `);
+
+              await db.query(`
+                create index if not exists codacy_issue_sync_repo_active_idx
+                on codacy_issue_sync (github_repository, codacy_org, codacy_repo, active);
+              `);
+            }
+
+            async function loadState() {
+              const result = await db.query(
+                `
+                  select github_repository, codacy_org, codacy_repo, codacy_issue_id, github_issue_number, active
+                  from codacy_issue_sync
+                  where github_repository = $1
+                    and codacy_org = $2
+                    and codacy_repo = $3
+                `,
+                [githubRepository, org, repoName]
+              );
+
+              return new Map(
+                result.rows.map(row => [row.codacy_issue_id, row])
+              );
+            }
+
+            async function bootstrapExistingState() {
+              const existing = await db.query(
+                `
+                  select count(*)::int as count
+                  from codacy_issue_sync
+                  where github_repository = $1
+                    and codacy_org = $2
+                    and codacy_repo = $3
+                `,
+                [githubRepository, org, repoName]
+              );
+
+              if ((existing.rows[0]?.count || 0) > 0) {
+                return;
+              }
+
+              const issues = await github.paginate(
+                github.rest.issues.listForRepo,
+                {
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  state: "all",
+                  labels: "codacy",
+                  per_page: 100
+                }
+              );
+
+              for (const issue of issues) {
+                const codacyIssueId = getCodacyIssueIdFromIssue(issue);
+                if (!codacyIssueId) {
+                  continue;
+                }
+
                 if (!dryRun) {
-                  await github.rest.issues.create({
-                    owner,
-                    repo,
-                    title,
-                    body,
-                    labels,
-                    assignees
-                  });
+                  await db.query(
+                    `
+                      insert into codacy_issue_sync (
+                        github_repository,
+                        codacy_org,
+                        codacy_repo,
+                        codacy_issue_id,
+                        github_issue_number,
+                        active,
+                        first_seen_at,
+                        last_seen_at,
+                        closed_at,
+                        updated_at
+                      )
+                      values ($1, $2, $3, $4, $5, $6, now(), now(), $7, now())
+                      on conflict (github_repository, codacy_org, codacy_repo, codacy_issue_id)
+                      do update set
+                        github_issue_number = excluded.github_issue_number,
+                        active = excluded.active,
+                        last_seen_at = excluded.last_seen_at,
+                        closed_at = excluded.closed_at,
+                        updated_at = excluded.updated_at;
+                    `,
+                    [
+                      githubRepository,
+                      org,
+                      repoName,
+                      codacyIssueId,
+                      issue.number,
+                      issue.state === "open",
+                      issue.state === "closed" ? new Date().toISOString() : null
+                    ]
+                  );
                 }
-                stats.created++;
-              } else {
-                const needsUpdate =
-                  existing.title !== title ||
-                  existing.body !== body;
-
-                if (needsUpdate && !dryRun) {
-                  await github.rest.issues.update({
-                    owner,
-                    repo,
-                    issue_number: existing.number,
-                    title,
-                    body,
-                    labels,
-                    state: "open"
-                  });
-                }
-
-                stats.updated++;
               }
             }
 
-            // CLOSE + CLEANUP (single pass, no extra API calls)
-            for (const [id, issue] of existingMap.entries()) {
+            async function ensureLabels() {
+              if (dryRun) {
+                return;
+              }
 
-              if (active.has(id)) continue;
+              for (const label of managedLabelDefinitions) {
+                try {
+                  await github.rest.issues.createLabel({
+                    owner: context.repo.owner,
+                    repo: context.repo.repo,
+                    name: label.name,
+                    color: label.color,
+                    description: label.description
+                  });
+                } catch (error) {
+                  if (error.status !== 422) {
+                    throw error;
+                  }
+                }
+              }
 
-              const hasCodacyLabel =
-                (issue.labels || []).some(l =>
-                  l.name.startsWith("codacy:")
-                );
+              for (const name of extraLabels) {
+                try {
+                  await github.rest.issues.createLabel({
+                    owner: context.repo.owner,
+                    repo: context.repo.repo,
+                    name,
+                    color: "ededed",
+                    description: "Added by the Codacy issue sync workflow"
+                  });
+                } catch (error) {
+                  if (error.status !== 422) {
+                    throw error;
+                  }
+                }
+              }
+            }
 
-              if (!dryRun) {
+            async function getIssue(issueNumber) {
+              try {
+                const response = await github.rest.issues.get({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  issue_number: issueNumber
+                });
 
+                return response.data;
+              } catch (error) {
+                if (error.status === 404) {
+                  return null;
+                }
+
+                throw error;
+              }
+            }
+
+            async function saveRecord(ci, issueNumber, active) {
+              if (dryRun) {
+                return;
+              }
+
+              await db.query(
+                `
+                  insert into codacy_issue_sync (
+                    github_repository,
+                    codacy_org,
+                    codacy_repo,
+                    codacy_issue_id,
+                    github_issue_number,
+                    active,
+                    first_seen_at,
+                    last_seen_at,
+                    closed_at,
+                    updated_at
+                  )
+                  values ($1, $2, $3, $4, $5, $6, now(), now(), $7, now())
+                  on conflict (github_repository, codacy_org, codacy_repo, codacy_issue_id)
+                  do update set
+                    github_issue_number = excluded.github_issue_number,
+                    active = excluded.active,
+                    last_seen_at = excluded.last_seen_at,
+                    closed_at = excluded.closed_at,
+                    updated_at = excluded.updated_at;
+                `,
+                [
+                  githubRepository,
+                  org,
+                  repoName,
+                  String(ci.issueId),
+                  issueNumber,
+                  active,
+                  active ? null : new Date().toISOString()
+                ]
+              );
+            }
+
+            async function closeRecord(record, issue) {
+              if (dryRun) {
+                return;
+              }
+
+              await db.query(
+                `
+                  update codacy_issue_sync
+                  set active = false,
+                      closed_at = coalesce(closed_at, now()),
+                      updated_at = now()
+                  where github_repository = $1
+                    and codacy_org = $2
+                    and codacy_repo = $3
+                    and codacy_issue_id = $4;
+                `,
+                [githubRepository, org, repoName, record.codacy_issue_id]
+              );
+
+              if (issue?.state === "open") {
                 await github.rest.issues.update({
-                  owner,
-                  repo,
-                  issue_number: issue.number,
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  issue_number: record.github_issue_number,
                   state: "closed"
                 });
-
-                await github.rest.issues.createComment({
-                  owner,
-                  repo,
-                  issue_number: issue.number,
-                  body: [
-                    "🤖 Auto-closed: no longer present in Codacy report.",
-                    "",
-                    `Last Codacy issueId: ${id}`
-                  ].join("\n")
-                });
-
-                // remove ONLY codacy:<id>, keep general "codacy"
-                if (hasCodacyLabel) {
-                  const remainingLabels = (issue.labels || [])
-                    .map(l => l.name)
-                    .filter(name =>
-                      name !== "codacy" &&
-                      !name.startsWith("codacy:")
-                    );
-
-                  await github.rest.issues.update({
-                    owner,
-                    repo,
-                    issue_number: issue.number,
-                    labels: remainingLabels
-                  });
-
-                  stats.cleaned++;
-                }
               }
 
-              stats.closed++;
+              if (record.active && issue?.state === "open") {
+                await github.rest.issues.createComment({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  issue_number: record.github_issue_number,
+                  body: [
+                    "Auto-closed because Codacy no longer reports this finding.",
+                    "",
+                    `Codacy issue ID: ${record.codacy_issue_id}`,
+                    `Repository: ${githubRepository}`
+                  ].join("\n")
+                });
+              }
             }
 
-            console.log(stats);
+            const stats = {
+              created: 0,
+              updated: 0,
+              reopened: 0,
+              closed: 0,
+              bootstrapped: 0
+            };
+
+            await db.connect();
+
+            try {
+              await ensureSchema();
+              await bootstrapExistingState();
+              await ensureLabels();
+
+              const codacyIssues = await fetchCodacyIssues();
+              const state = await loadState();
+              const activeIssueIds = new Set(codacyIssues.map(issue => String(issue.issueId)));
+
+              for (const ci of codacyIssues) {
+                const codacyIssueId = String(ci.issueId);
+                const title = `[Codacy] ${ci.message}`;
+                const body = buildBody(ci);
+                const desiredLabels = buildLabels(ci);
+                const existingRecord = state.get(codacyIssueId);
+
+                if (!existingRecord) {
+                  if (!dryRun) {
+                    const response = await github.rest.issues.create({
+                      owner: context.repo.owner,
+                      repo: context.repo.repo,
+                      title,
+                      body,
+                      labels: desiredLabels,
+                      assignees
+                    });
+
+                    await saveRecord(ci, response.data.number, true);
+                  }
+
+                  stats.created++;
+                  continue;
+                }
+
+                const issue = await getIssue(existingRecord.github_issue_number);
+
+                if (!issue) {
+                  if (!dryRun) {
+                    const response = await github.rest.issues.create({
+                      owner: context.repo.owner,
+                      repo: context.repo.repo,
+                      title,
+                      body,
+                      labels: desiredLabels,
+                      assignees
+                    });
+
+                    await saveRecord(ci, response.data.number, true);
+                  }
+
+                  stats.created++;
+                  continue;
+                }
+
+                const mergedLabels = mergeLabels(issue.labels, desiredLabels);
+                const currentLabels = uniq((issue.labels || []).map(label => label.name)).sort();
+                const nextLabels = uniq(mergedLabels).sort();
+                const needsTitleUpdate = issue.title !== title;
+                const needsBodyUpdate = issue.body !== body;
+                const needsLabelUpdate = currentLabels.join("\u0000") !== nextLabels.join("\u0000");
+                const needsReopen = issue.state === "closed";
+
+                if (dryRun) {
+                  if (needsReopen) {
+                    stats.reopened++;
+                  }
+                  if (needsTitleUpdate || needsBodyUpdate || needsLabelUpdate) {
+                    stats.updated++;
+                  }
+                  continue;
+                }
+
+                if (needsTitleUpdate || needsBodyUpdate || needsLabelUpdate || needsReopen) {
+                  await github.rest.issues.update({
+                    owner: context.repo.owner,
+                    repo: context.repo.repo,
+                    issue_number: issue.number,
+                    title,
+                    body,
+                    labels: mergedLabels,
+                    state: "open"
+                  });
+
+                  if (needsReopen) {
+                    stats.reopened++;
+                  } else if (needsTitleUpdate || needsBodyUpdate || needsLabelUpdate) {
+                    stats.updated++;
+                  }
+                }
+
+                await saveRecord(ci, issue.number, true);
+              }
+
+              const recordsToClose = [...state.values()]
+                .filter(record => !activeIssueIds.has(String(record.codacy_issue_id)));
+
+              for (const record of recordsToClose) {
+                if (dryRun) {
+                  stats.closed++;
+                  continue;
+                }
+
+                const issue = await getIssue(record.github_issue_number);
+
+                if (!issue) {
+                  await closeRecord(record, null);
+                  stats.closed++;
+                  continue;
+                }
+
+                if (!record.active && issue.state === "closed") {
+                  continue;
+                }
+
+                await closeRecord(record, issue);
+                stats.closed++;
+              }
+
+              console.log(JSON.stringify(stats, null, 2));
+            } finally {
+              await db.end();
+            }

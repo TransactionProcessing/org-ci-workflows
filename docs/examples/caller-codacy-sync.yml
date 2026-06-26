@@ -4,8 +4,9 @@
 # No other changes are needed in the target repository.
 #
 # Prerequisites:
-#   - The organisation secret CODACY_API_TOKEN must exist and be accessible
-#     to this repository (GitHub → Organisation Settings → Secrets → Actions).
+#   - The organisation secrets CODACY_API_TOKEN and NEON_DATABASE_URL must
+#     exist and be accessible to this repository (GitHub → Organisation
+#     Settings → Secrets → Actions).
 #   - The repository's workflow permissions must allow issues: write
 #     (Settings → Actions → General → Workflow permissions → Read and write).
 #
@@ -25,7 +26,7 @@ jobs:
   sync:
     uses: TransactionProcessing/org-ci-workflows/.github/workflows/sync-codacy-issues.yml@main
     # Automatically forwards all organisation and repository secrets,
-    # including CODACY_API_TOKEN, to the reusable workflow.
+    # including CODACY_API_TOKEN and NEON_DATABASE_URL, to the reusable workflow.
     secrets: inherit
     # ── Optional inputs (shown with their defaults) ──────────────────────────
     # Remove or comment out any lines you don't need to customise.
