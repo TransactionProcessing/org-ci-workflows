@@ -194,18 +194,13 @@ jobs:
                 return "";
               }
 
-              const fileName = path.basename(filePath || "");
-              const dotIndex = fileName.lastIndexOf(".");
+              const fileName = path.basename(filePath);
+              const ext = path.extname(fileName).slice(1).toLowerCase();
 
-              if (dotIndex < 0 || dotIndex === fileName.length - 1) {
+              if (!ext) {
                 return "";
               }
 
-              if (fileName.startsWith(".") && dotIndex === 0) {
-                return "";
-              }
-
-              const ext = fileName.slice(dotIndex + 1).toLowerCase();
               const map = {
                 js: "javascript",
                 jsx: "javascript",
