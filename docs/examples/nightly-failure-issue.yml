@@ -1,0 +1,35 @@
+name: Nightly example
+
+on:
+  schedule:
+    - cron: '0 2 * * *'
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: ./run-nightly-build.sh
+
+      - name: Capture failure context
+        if: ${{ failure() }}
+        run: |
+          {
+            echo "ISSUE_BODY<<EOF"
+            echo "Repo: ${{ github.repository }}"
+            echo "Run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+            echo "Commit: ${{ github.sha }}"
+            echo "Failure URL: ${{ env.action_url }}"
+            echo "EOF"
+          } >> "$GITHUB_ENV"
+
+      - name: Notify on nightly failure
+        if: ${{ failure() }}
+        uses: TransactionProcessing/org-ci-workflows/.github/actions/nightly-failure-issue@main
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          title: Investigate Nightly Build Failure
+          labels: nightlybuild
+          dedupe_key: nightly-build
+          body: ${{ env.ISSUE_BODY }}

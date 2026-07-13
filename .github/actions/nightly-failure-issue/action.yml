@@ -1,0 +1,87 @@
+name: Nightly failure issue
+description: Create a single open issue for nightly failures, or comment on the existing one if it already exists.
+
+inputs:
+  github_token:
+    description: GitHub token with issues:write permission.
+    required: true
+  title:
+    description: Issue title to create or match.
+    required: true
+  labels:
+    description: Comma-separated issue labels.
+    required: false
+    default: nightlybuild
+  body:
+    description: Base issue body to create or append to the first comment.
+    required: true
+  dedupe_key:
+    description: Stable key used to detect an existing open issue.
+    required: true
+  comment_prefix:
+    description: Text to prepend when commenting on an existing issue.
+    required: false
+    default: New nightly failure detected.
+
+runs:
+  using: composite
+  steps:
+    - name: Create or update nightly failure issue
+      uses: actions/github-script@v7
+      with:
+        github-token: ${{ inputs.github_token }}
+        script: |
+          const owner = context.repo.owner;
+          const repo = context.repo.repo;
+          const body = process.env.NIGHTLY_BODY;
+          const labels = (process.env.NIGHTLY_LABELS || '')
+            .split(',')
+            .map(s => s.trim())
+            .filter(Boolean);
+          const dedupeKey = process.env.NIGHTLY_DEDUPE_KEY;
+          const commentPrefix = process.env.NIGHTLY_COMMENT_PREFIX;
+          const marker = `<!-- nightly-failure-key: ${dedupeKey} -->`;
+          const issueBody = `${body}\n\n${marker}`;
+
+          const openIssues = await github.paginate(github.rest.issues.listForRepo, {
+            owner,
+            repo,
+            state: 'open',
+            per_page: 100,
+          });
+
+          const existing = openIssues.find(issue =>
+            !issue.pull_request &&
+            typeof issue.body === 'string' &&
+            issue.body.includes(marker)
+          );
+
+          const runUrl = `${context.serverUrl}/${owner}/${repo}/actions/runs/${context.runId}`;
+          const note = `${commentPrefix}\n\nRun: ${runUrl}`;
+
+          if (existing) {
+            await github.rest.issues.createComment({
+              owner,
+              repo,
+              issue_number: existing.number,
+              body: note,
+            });
+            core.info(`Commented on existing issue #${existing.number}`);
+            return;
+          }
+
+          const created = await github.rest.issues.create({
+            owner,
+            repo,
+            title: process.env.NIGHTLY_TITLE,
+            body: `${issueBody}\n\n${note}`,
+            labels,
+          });
+
+          core.info(`Created issue #${created.data.number}`);
+      env:
+        NIGHTLY_TITLE: ${{ inputs.title }}
+        NIGHTLY_BODY: ${{ inputs.body }}
+        NIGHTLY_LABELS: ${{ inputs.labels }}
+        NIGHTLY_DEDUPE_KEY: ${{ inputs.dedupe_key }}
+        NIGHTLY_COMMENT_PREFIX: ${{ inputs.comment_prefix }}
