@@ -33,7 +33,6 @@ runs:
         script: |
           const owner = context.repo.owner;
           const repo = context.repo.repo;
-          const title = process.env.NIGHTLY_TITLE;
           const body = process.env.NIGHTLY_BODY;
           const labels = (process.env.NIGHTLY_LABELS || '')
             .split(',')
@@ -44,14 +43,12 @@ runs:
           const marker = `<!-- nightly-failure-key: ${dedupeKey} -->`;
           const issueBody = `${body}\n\n${marker}`;
 
-          const listParams = {
+          const openIssues = await github.paginate(github.rest.issues.listForRepo, {
             owner,
             repo,
             state: 'open',
             per_page: 100,
-          };
-
-          const openIssues = await github.paginate(github.rest.issues.listForRepo, listParams);
+          });
 
           const existing = openIssues.find(issue =>
             !issue.pull_request &&
@@ -60,7 +57,7 @@ runs:
           );
 
           const runUrl = `${context.serverUrl}/${owner}/${repo}/actions/runs/${context.runId}`;
-          const note = `${commentPrefix}\n\nRun: ${runUrl}\nWorkflow: ${context.workflow}\nJob: ${context.job}`;
+          const note = `${commentPrefix}\n\nRun: ${runUrl}`;
 
           if (existing) {
             await github.rest.issues.createComment({
@@ -76,7 +73,7 @@ runs:
           const created = await github.rest.issues.create({
             owner,
             repo,
-            title,
+            title: process.env.NIGHTLY_TITLE,
             body: `${issueBody}\n\n${note}`,
             labels,
           });
