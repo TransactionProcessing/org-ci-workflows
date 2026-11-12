@@ -65,6 +65,7 @@ jobs:
           EXTRA_LABELS: ${{ inputs.extra_labels }}
           ASSIGNEES: ${{ inputs.assignees }}
           SEVERITY_FILTER: ${{ inputs.severity_filter }}
+          NEON_SIMULATE_DISCONNECT_ONCE: ${{ vars.NEON_SIMULATE_DISCONNECT_ONCE }}
         with:
           github-token: ${{ github.token }}
           script: |
@@ -98,10 +99,62 @@ jobs:
             if (!token) throw new Error("Missing CODACY_API_TOKEN");
             if (!dbUrl) throw new Error("Missing NEON_DATABASE_URL");
 
-            const db = new Client({
-              connectionString: dbUrl,
-              ssl: { rejectUnauthorized: false }
-            });
+            const transientDatabaseErrors = new Set([
+              "08000", "08003", "08006", "08001", "08004", "57P01", "57P02", "57P03"
+            ]);
+            let simulatedDisconnectInjected = false;
+
+            function isTransientDatabaseError(error) {
+              return transientDatabaseErrors.has(error?.code) ||
+                /connection terminated unexpectedly|connection (?:is )?closed|socket hang up|client has already been connected/i.test(error?.message || "");
+            }
+
+            async function queryDatabase(text, values = []) {
+              const maxAttempts = 3;
+
+              for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+                if (process.env.NEON_SIMULATE_DISCONNECT_ONCE === "true" && !simulatedDisconnectInjected) {
+                  simulatedDisconnectInjected = true;
+                  const error = new Error("Simulated Neon administrator connection termination");
+                  error.code = "57P01";
+                  console.warn("Injecting one simulated Neon disconnect to exercise retry handling.");
+                  if (attempt === maxAttempts) throw error;
+                  await new Promise(resolve => setTimeout(resolve, 500));
+                  continue;
+                }
+
+                const db = new Client({
+                  connectionString: dbUrl,
+                  ssl: { rejectUnauthorized: false },
+                  connectionTimeoutMillis: 10000,
+                  query_timeout: 15000
+                });
+                let connectionError;
+                db.on("error", error => {
+                  connectionError = error;
+                });
+
+                try {
+                  await db.connect();
+                  const result = await db.query(text, values);
+                  if (connectionError) throw connectionError;
+                  return result;
+                } catch (error) {
+                  if (!isTransientDatabaseError(error) || attempt === maxAttempts) {
+                    const detail = error?.code ? ` (${error.code})` : "";
+                    throw new Error(`Neon database operation failed after ${attempt} attempt(s)${detail}: ${error.message}`);
+                  }
+
+                  const delayMs = 500 * (2 ** (attempt - 1));
+                  console.warn(`Transient Neon database error${error?.code ? ` ${error.code}` : ""}; retrying in ${delayMs}ms (attempt ${attempt}/${maxAttempts}).`);
+                  await new Promise(resolve => setTimeout(resolve, delayMs));
+                } finally {
+                  if (db._connected) {
+                    await db.end().catch(error => console.warn(`Unable to close Neon connection cleanly: ${error.message}`));
+                  }
+                }
+              }
+            }
 
             const managedLabelDefinitions = [
               { name: "codacy", color: "0075ca", description: "Managed by the Codacy issue sync workflow" },
@@ -367,7 +420,7 @@ jobs:
             }
 
             async function ensureSchema() {
-              await db.query(`
+              await queryDatabase(`
                 create table if not exists codacy_issue_sync (
                   github_repository text not null,
                   codacy_org text not null,
@@ -383,14 +436,14 @@ jobs:
                 );
               `);
 
-              await db.query(`
+              await queryDatabase(`
                 create index if not exists codacy_issue_sync_repo_active_idx
                 on codacy_issue_sync (github_repository, codacy_org, codacy_repo, active);
               `);
             }
 
             async function loadState() {
-              const result = await db.query(
+              const result = await queryDatabase(
                 `
                   select github_repository, codacy_org, codacy_repo, codacy_issue_id, github_issue_number, active
                   from codacy_issue_sync
@@ -407,7 +460,7 @@ jobs:
             }
 
             async function bootstrapExistingState() {
-              const existing = await db.query(
+              const existing = await queryDatabase(
                 `
                   select count(*)::int as count
                   from codacy_issue_sync
@@ -440,7 +493,7 @@ jobs:
                 }
 
                 if (!dryRun) {
-                  await db.query(
+                  await queryDatabase(
                     `
                       insert into codacy_issue_sync (
                         github_repository,
@@ -538,7 +591,7 @@ jobs:
                 return;
               }
 
-              await db.query(
+              await queryDatabase(
                 `
                   insert into codacy_issue_sync (
                     github_repository,
@@ -578,7 +631,7 @@ jobs:
                 return;
               }
 
-              await db.query(
+              await queryDatabase(
                 `
                   update codacy_issue_sync
                   set active = false,
@@ -624,9 +677,6 @@ jobs:
               bootstrapped: 0
             };
 
-            await db.connect();
-
-            try {
               await ensureSchema();
               await bootstrapExistingState();
               await ensureLabels();
@@ -644,16 +694,27 @@ jobs:
 
                 if (!existingRecord) {
                   if (!dryRun) {
-                    const response = await github.rest.issues.create({
+                    // Recover an issue created before a prior run lost its Neon connection.
+                    const existingIssues = await github.paginate(github.rest.issues.listForRepo, {
+                      owner: context.repo.owner,
+                      repo: context.repo.repo,
+                      state: "all",
+                      labels: "codacy",
+                      per_page: 100
+                    });
+                    const recoveredIssue = existingIssues.find(issue =>
+                      getCodacyIssueIdFromIssue(issue) === codacyIssueId
+                    );
+                    const issue = recoveredIssue || (await github.rest.issues.create({
                       owner: context.repo.owner,
                       repo: context.repo.repo,
                       title,
                       body,
                       labels: desiredLabels,
                       assignees
-                    });
+                    })).data;
 
-                    await saveRecord(ci, response.data.number, true);
+                    await saveRecord(ci, issue.number, true);
                   }
 
                   stats.created++;
@@ -664,16 +725,26 @@ jobs:
 
                 if (!issue) {
                   if (!dryRun) {
-                    const response = await github.rest.issues.create({
+                    const existingIssues = await github.paginate(github.rest.issues.listForRepo, {
+                      owner: context.repo.owner,
+                      repo: context.repo.repo,
+                      state: "all",
+                      labels: "codacy",
+                      per_page: 100
+                    });
+                    const recoveredIssue = existingIssues.find(candidate =>
+                      getCodacyIssueIdFromIssue(candidate) === codacyIssueId
+                    );
+                    const replacementIssue = recoveredIssue || (await github.rest.issues.create({
                       owner: context.repo.owner,
                       repo: context.repo.repo,
                       title,
                       body,
                       labels: desiredLabels,
                       assignees
-                    });
+                    })).data;
 
-                    await saveRecord(ci, response.data.number, true);
+                    await saveRecord(ci, replacementIssue.number, true);
                   }
 
                   stats.created++;
@@ -745,6 +816,3 @@ jobs:
               }
 
               console.log(JSON.stringify(stats, null, 2));
-            } finally {
-              await db.end();
-            }

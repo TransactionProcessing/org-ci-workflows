@@ -47,6 +47,11 @@ You must provide:
 
 The caller can keep using `secrets: inherit` if both secrets are available to that repository.
 
+For a one time retry-path check, set the Actions repository or organisation variable
+`NEON_SIMULATE_DISCONNECT_ONCE` to `true`. The workflow injects a simulated `57P01`
+before its first database query, then continues after the retry. Remove the variable
+after confirming the run; normal runs leave it unset.
+
 ---
 
 ## Required secrets
@@ -68,6 +73,13 @@ The caller can keep using `secrets: inherit` if both secrets are available to th
 | `extra_labels` | `string` | No | `""` | Optional labels to add to synced issues. These are metadata only and are not used for dedupe. |
 | `assignees` | `string` | No | `""` | GitHub usernames to assign to newly created issues. |
 | `dry_run` | `boolean` | No | `false` | When `true`, logs planned actions without mutating GitHub or Neon. |
+
+Database queries use a fresh connection and retry transient PostgreSQL connection
+errors up to three times. If all attempts fail, the step exits with the PostgreSQL
+error code and a clear failure message. Before creating an issue when sync state is
+missing, the workflow searches existing Codacy issues for the same Codacy ID and
+reuses the match, covering interruptions after GitHub creation but before the Neon
+state write.
 
 ---
 
