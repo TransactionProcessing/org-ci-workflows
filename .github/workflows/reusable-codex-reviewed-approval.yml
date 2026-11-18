@@ -1,0 +1,151 @@
+name: Codex reviewed PR approval
+
+# Shared approval logic; runs against the calling repository, never checks out PR code.
+on:
+  workflow_call:
+    inputs:
+      base_branch:
+        type: string
+        required: false
+        default: main
+      required_checks_json:
+        type: string
+        required: true
+        description: 'JSON array of [check name, GitHub App slug] pairs'
+    secrets:
+      reviewer_token:
+        required: true
+
+permissions:
+  contents: read
+  issues: read
+  pull-requests: read
+  checks: read
+
+concurrency:
+  group: codex-approval
+  cancel-in-progress: false
+
+jobs:
+  approve:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Verify Codex and CI, then approve
+        uses: actions/github-script@v7
+        env:
+          REQUIRED_CHECKS_JSON: ${{ inputs.required_checks_json }}
+          BASE_BRANCH: ${{ inputs.base_branch }}
+        with:
+          github-token: ${{ secrets.reviewer_token }}
+          script: |
+            const { owner, repo } = context.repo;
+            const reviewer = github;
+            const { data: reviewerIdentity } = await reviewer.rest.users.getAuthenticated();
+            const reviewerLogin = reviewerIdentity.login;
+            core.info(`Approval identity: ${reviewerLogin}`);
+            const expectedBot = 'chatgpt-codex-connector[bot]';
+            const required = JSON.parse(process.env.REQUIRED_CHECKS_JSON);
+            if (!Array.isArray(required) || !required.length ||
+                !required.every(x => Array.isArray(x) && x.length === 2 &&
+                  x.every(v => typeof v === 'string' && v.length > 0))) {
+              core.setFailed('required_checks_json must be a nonempty array of [name, app slug] pairs');
+              return;
+            }
+            const numbers = context.eventName === 'issue_comment'
+              ? [context.issue.number]
+              : (await github.paginate(github.rest.pulls.list, {
+                  owner, repo, state: 'open', per_page: 100
+                })).map(pr => pr.number);
+
+            for (const pull_number of numbers) {
+              const skip = reason => core.info(`PR #${pull_number}: ${reason}`);
+              const { data: pr } = await github.rest.pulls.get({owner, repo, pull_number});
+              if (pr.state !== 'open' || pr.draft || pr.base.ref !== process.env.BASE_BRANCH) {
+                skip('not an open, ready PR against main'); continue;
+              }
+              // Only approve same-repository PRs; never execute or trust fork code.
+              if (pr.head.repo?.full_name !== `${owner}/${repo}`) {
+                skip('fork PR'); continue;
+              }
+              const sha = pr.head.sha;
+              const comments = await github.paginate(github.rest.issues.listComments, {
+                owner, repo, issue_number: pull_number, per_page: 100
+              });
+              const summaries = comments.filter(c =>
+                c.user?.login === expectedBot && c.user?.type === 'Bot' &&
+                c.body?.includes('<!-- codex-pull-request-review-summary -->'));
+              const summary = summaries.at(-1);
+              if (!summary) { skip('no trusted Codex summary'); continue; }
+              const matches = [...summary.body.matchAll(
+                /<!-- codex-review-state:v1 (\{[^\n]*\}) -->/g
+              )];
+              if (matches.length !== 1) { skip('missing/ambiguous review state'); continue; }
+              let state;
+              try { state = JSON.parse(matches[0][1]); }
+              catch { skip('invalid review JSON'); continue; }
+              const review = state?.code_review;
+              if (review?.status !== 'completed' ||
+                  review.commit_sha !== sha ||
+                  review.has_any_findings !== false ||
+                  review.has_unresolved_findings !== false) {
+                skip('review not clean and complete for current head'); continue;
+              }
+              // If a security review was requested, it must also pass on this head.
+              const security = state?.security_review;
+              if (security?.status != null &&
+                  (security.status !== 'completed' ||
+                   security.commit_sha !== sha ||
+                   security.has_any_findings !== false ||
+                   security.has_unresolved_findings !== false)) {
+                skip('security review incomplete or has findings'); continue;
+              }
+              // Check-runs is an object response ({ check_runs: [...] }), not
+              // a top-level array. Explicitly page it and fail closed on bad data.
+              const checks = [];
+              let checkResponseValid = true;
+              for (let page = 1; page <= 20; page++) {
+                const { data } = await github.rest.checks.listForRef({
+                  owner, repo, ref: sha, per_page: 100, page, filter: 'latest'
+                });
+                if (!Array.isArray(data?.check_runs)) {
+                  checkResponseValid = false;
+                  break;
+                }
+                checks.push(...data.check_runs);
+                if (data.check_runs.length < 100) break;
+                if (page === 20) checkResponseValid = false;
+              }
+              if (!checkResponseValid) {
+                skip('invalid or incomplete CI check-run response'); continue;
+              }
+              const passed = required.every(([name, app]) =>
+                checks.some(c => c?.name === name && c?.app?.slug === app &&
+                  c?.head_sha === sha && c?.status === 'completed' &&
+                  c?.conclusion === 'success'));
+              if (!passed) { skip('required CI checks missing or failing'); continue; }
+
+              const existing = await github.paginate(github.rest.pulls.listReviews, {
+                owner, repo, pull_number, per_page: 100
+              });
+              if (pr.user?.login?.toLowerCase() === reviewerLogin.toLowerCase()) {
+                skip('reviewer cannot approve own PR'); continue;
+              }
+              if (existing.some(r => r.user?.login?.toLowerCase() === reviewerLogin.toLowerCase() &&
+                  r.state === 'APPROVED' && r.commit_id === sha)) {
+                skip('already approved by reviewer user'); continue;
+              }
+              // Re-read head immediately before submitting approval.
+              const { data: latest } = await github.rest.pulls.get({
+                owner, repo, pull_number
+              });
+              if (latest.head.sha !== sha || latest.state !== 'open' || latest.draft) {
+                skip('PR changed during verification'); continue;
+              }
+              await github.rest.pulls.createReview({
+                owner, repo, pull_number, commit_id: sha,
+                event: 'APPROVE',
+                body: 'Codex review completed with no findings for this commit; required CI checks passed. This is an automated review, not a merge.'
+              });
+              core.info(`Approved PR #${pull_number} at ${sha}`);
+            }
