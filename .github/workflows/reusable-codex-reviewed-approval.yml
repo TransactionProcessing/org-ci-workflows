@@ -22,9 +22,6 @@ permissions:
   pull-requests: read
   checks: read
 
-concurrency:
-  group: codex-approval
-  cancel-in-progress: false
 
 jobs:
   approve:
