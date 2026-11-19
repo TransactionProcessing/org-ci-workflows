@@ -84,9 +84,8 @@ jobs:
               const review = state?.code_review;
               if (review?.status !== 'completed' ||
                   review.commit_sha !== sha ||
-                  review.has_any_findings !== false ||
                   review.has_unresolved_findings !== false) {
-                skip('review not clean and complete for current head'); continue;
+                skip('code review incomplete, stale or has unresolved findings'); continue;
               }
               // If a security review was requested, it must also pass on this head.
               const security = state?.security_review;
@@ -142,7 +141,7 @@ jobs:
               await github.rest.pulls.createReview({
                 owner, repo, pull_number, commit_id: sha,
                 event: 'APPROVE',
-                body: 'Codex review completed with no findings for this commit; required CI checks passed. This is an automated review, not a merge.'
+                body: 'Codex completed its code review for this commit with no unresolved findings. Required CI checks passed. GitHub Actions submitted this approval.'
               });
               core.info(`Approved PR #${pull_number} at ${sha}`);
             }
