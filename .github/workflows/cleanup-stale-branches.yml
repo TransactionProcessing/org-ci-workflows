@@ -1,0 +1,113 @@
+name: Cleanup merged stale branches
+
+on:
+  workflow_call:
+    inputs:
+      stale-days:
+        description: Number of days without a commit before considering a branch stale
+        type: number
+        required: false
+        default: 60
+      dry-run:
+        description: Log candidates without deleting them
+        type: boolean
+        required: false
+        default: true
+
+permissions:
+  contents: write
+  pull-requests: read
+
+jobs:
+  cleanup:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout caller repository for Git pushes
+        if: ${{ !inputs.dry-run }}
+        uses: actions/checkout@v4
+
+      - name: Delete only merged stale branches
+        uses: actions/github-script@v7
+        env:
+          STALE_DAYS: ${{ inputs.stale-days }}
+          DRY_RUN: ${{ inputs.dry-run }}
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const { owner, repo } = context.repo;
+            const days = Number(process.env.STALE_DAYS);
+            const dryRun = process.env.DRY_RUN === 'true';
+            if (!Number.isSafeInteger(days) || days < 1) {
+              core.setFailed('stale-days must be a positive integer');
+              return;
+            }
+            const { data: repository } = await github.rest.repos.get({ owner, repo });
+            const defaultBranch = repository.default_branch;
+            const cutoff = Date.now() - days * 86400000;
+            const branches = await github.paginate(github.rest.repos.listBranches, {
+              owner, repo, per_page: 100, protected: false
+            });
+            let deleted = 0, candidates = 0, skipped = 0;
+            for (const branch of branches) {
+              const name = branch.name;
+              const sha = branch.commit.sha;
+              try {
+                if (name === defaultBranch || branch.protected) {
+                  skipped++;
+                  continue;
+                }
+                const { data: commit } = await github.rest.repos.getCommit({
+                  owner, repo, ref: sha
+                });
+                const date = commit.commit.committer?.date;
+                if (!date || Date.parse(date) >= cutoff) {
+                  core.info('SKIP ' + name + ': recent commit or unknown date');
+                  skipped++;
+                  continue;
+                }
+                const prs = await github.paginate(github.rest.pulls.list, {
+                  owner, repo, state: 'open', head: owner + ':' + name, per_page: 100
+                });
+                if (prs.length) {
+                  core.info('SKIP ' + name + ': open pull request');
+                  skipped++;
+                  continue;
+                }
+                // "behind" or "identical" means the branch tip is already in the default branch.
+                // Squash/rebase merges without matching ancestry are deliberately retained.
+                const { data: comparison } = await github.rest.repos.compareCommitsWithBasehead({
+                  owner, repo, basehead: defaultBranch + '...' + sha
+                });
+                if (!['behind', 'identical'].includes(comparison.status)) {
+                  core.info('SKIP ' + name + ': not fully merged (' + comparison.status + ')');
+                  skipped++;
+                  continue;
+                }
+                // Fail closed if the branch changed while it was being evaluated.
+                const { data: current } = await github.rest.repos.getBranch({
+                  owner, repo, branch: name
+                });
+                if (current.protected || current.commit.sha !== sha) {
+                  core.info('SKIP ' + name + ': protected or updated during scan');
+                  skipped++;
+                  continue;
+                }
+                candidates++;
+                if (dryRun) {
+                  core.info('DRY RUN: would delete ' + name);
+                } else {
+                  const ref = 'refs/heads/' + name;
+                  // Delete only if the remote ref still points to the evaluated commit.
+                  await exec.exec('git', ['push', '--force-with-lease=' + ref + ':' + sha, 'origin', ':' + ref]);
+                  core.info('DELETED ' + name);
+                  deleted++;
+                }
+              } catch (error) {
+                core.warning('SKIP ' + name + ': ' + error.message);
+                skipped++;
+              }
+            }
+            await core.summary.addHeading('Merged stale branch cleanup')
+              .addRaw('Threshold: ' + days + ' days; dry run: ' + dryRun + '\\n')
+              .addRaw('Candidates: ' + candidates + '; deleted: ' + deleted + '; skipped: ' + skipped)
+              .write();
