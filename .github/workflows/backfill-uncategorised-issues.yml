@@ -46,7 +46,7 @@ jobs:
           DRY_RUN: ${{ inputs.dry-run }}
         with:
           # A fine-grained PAT or GitHub App token with Actions:write on each target repository.
-          github-token: ${{ secrets.ISSUE_BACKFILL_DISPATCH_TOKEN }}
+          github-token: ${{ secrets.GH_TOKEN }}
           script: |
             const owner = 'TransactionProcessing';
             const workflow = 'uncategorised-issues.yml';
