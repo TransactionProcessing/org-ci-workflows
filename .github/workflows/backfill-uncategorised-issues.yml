@@ -1,0 +1,89 @@
+name: Backfill uncategorised issues across repositories
+
+on:
+  workflow_dispatch:
+    inputs:
+      repository:
+        description: Repository name, or 'all' for all configured repositories
+        type: choice
+        required: true
+        default: all
+        options:
+          - all
+          - SharedConfiguration
+          - Shared
+          - EventStoreProjections
+          - Messaging
+          - SecurityService
+          - CallbackHandler
+          - MobileConfiguration
+          - EstateReportingAPI
+          - SubscriptionService
+          - TransactionProcessor
+          - TransactionProcessorACL
+          - FileProcessor
+          - TestHosts
+          - EstateManagementUI
+          - TransactionMobile
+          - SupportTools
+      dry-run:
+        description: Preview issue-label changes without writing them
+        type: boolean
+        required: true
+        default: true
+
+permissions:
+  contents: read
+
+jobs:
+  dispatch:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Trigger repository backfills
+        uses: actions/github-script@v7
+        env:
+          TARGET_REPOSITORY: ${{ inputs.repository }}
+          DRY_RUN: ${{ inputs.dry-run }}
+        with:
+          # A fine-grained PAT or GitHub App token with Actions:write on each target repository.
+          github-token: ${{ secrets.ISSUE_BACKFILL_DISPATCH_TOKEN }}
+          script: |
+            const owner = 'TransactionProcessing';
+            const workflow = 'uncategorised-issues.yml';
+            const repositories = [
+              'SharedConfiguration', 'Shared', 'EventStoreProjections', 'Messaging',
+              'SecurityService', 'CallbackHandler', 'MobileConfiguration',
+              'EstateReportingAPI', 'SubscriptionService', 'TransactionProcessor',
+              'TransactionProcessorACL', 'FileProcessor', 'TestHosts',
+              'EstateManagementUI', 'TransactionMobile', 'SupportTools'
+            ];
+            const selection = process.env.TARGET_REPOSITORY;
+            const targets = selection === 'all' ? repositories : [selection];
+            if (targets.some(repo => !repositories.includes(repo))) {
+              core.setFailed('Unsupported target repository: ' + selection);
+              return;
+            }
+            const dryRun = process.env.DRY_RUN === 'true';
+            const results = [];
+            for (const repo of targets) {
+              try {
+                await github.rest.actions.createWorkflowDispatch({
+                  owner, repo, workflow_id: workflow, ref: 'main',
+                  inputs: { 'dry-run': String(dryRun) }
+                });
+                results.push({ repo, status: 'Dispatch accepted' });
+                core.info(repo + ': dispatch accepted');
+              } catch (error) {
+                results.push({ repo, status: 'FAILED: ' + error.message });
+                core.error(repo + ': ' + error.message);
+              }
+            }
+            await core.summary.addHeading('Uncategorised issue backfill dispatch')
+              .addRaw('Dry run: ' + dryRun + '. Dispatch acceptance does not mean the backfill has completed.')
+              .addTable([
+                [{ data: 'Repository', header: true }, { data: 'Dispatch status', header: true }],
+                ...results.map(({ repo, status }) => [repo, status])
+              ]).write();
+            if (results.some(result => result.status.startsWith('FAILED'))) {
+              core.setFailed('One or more repository workflow dispatches failed');
+            }
