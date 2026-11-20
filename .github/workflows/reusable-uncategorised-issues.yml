@@ -1,0 +1,111 @@
+name: Reusable - Categorise unclassified issues
+
+on:
+  workflow_call:
+    inputs:
+      issue-number:
+        description: Specific issue number (zero scans all open issues)
+        type: number
+        required: false
+        default: 0
+      dry-run:
+        description: Report changes without modifying labels
+        type: boolean
+        required: false
+        default: false
+      marker-label:
+        type: string
+        required: false
+        default: Uncategorised
+
+permissions:
+  issues: write
+
+jobs:
+  reconcile:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Reconcile uncategorised labels
+        uses: actions/github-script@v7
+        env:
+          ISSUE_NUMBER: ${{ inputs.issue-number }}
+          DRY_RUN: ${{ inputs.dry-run }}
+          MARKER_LABEL: ${{ inputs.marker-label }}
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const { owner, repo } = context.repo;
+            const labelName = process.env.MARKER_LABEL.trim();
+            const number = Number(process.env.ISSUE_NUMBER);
+            const dryRun = process.env.DRY_RUN === 'true';
+            if (!labelName || !Number.isSafeInteger(number) || number < 0) {
+              core.setFailed('Invalid issue-number or marker-label');
+              return;
+            }
+            const normalize = value => value.toLocaleLowerCase('en-US');
+            let created = false;
+            const issues = number
+              ? [(await github.rest.issues.get({ owner, repo, issue_number: number })).data]
+              : await github.paginate(github.rest.issues.listForRepo, {
+                  owner, repo, state: 'open', per_page: 100
+                });
+            let added = 0, removed = 0, unchanged = 0, skipped = 0;
+            async function ensureLabel() {
+              if (created || dryRun) return;
+              try {
+                await github.rest.issues.getLabel({ owner, repo, name: labelName });
+              } catch (error) {
+                if (error.status !== 404) throw error;
+                try {
+                  await github.rest.issues.createLabel({
+                    owner, repo, name: labelName, color: 'D4C5F9',
+                    description: 'Issue missing a meaningful label or issue type'
+                  });
+                } catch (createError) {
+                  if (createError.status !== 422) throw createError;
+                }
+              }
+              created = true;
+            }
+            for (const candidate of issues) {
+              if (candidate.pull_request || candidate.state !== 'open') {
+                skipped++;
+                continue;
+              }
+              // Always read latest data before deciding to mutate.
+              const { data: issue } = await github.rest.issues.get({
+                owner, repo, issue_number: candidate.number
+              });
+              if (issue.pull_request || issue.state !== 'open') {
+                skipped++;
+                continue;
+              }
+              const labels = (issue.labels || []).map(l => typeof l === 'string' ? l : l.name);
+              const hasMarker = labels.some(l => normalize(l) === normalize(labelName));
+              const hasRealLabel = labels.some(l => normalize(l) !== normalize(labelName));
+              const hasType = Boolean(issue.type);
+              const shouldMark = !hasRealLabel || !hasType;
+              if (shouldMark && !hasMarker) {
+                await ensureLabel();
+                if (!dryRun) {
+                  await github.rest.issues.addLabels({
+                    owner, repo, issue_number: issue.number, labels: [labelName]
+                  });
+                }
+                core.info((dryRun ? 'WOULD ADD ' : 'ADDED ') + labelName + ' to #' + issue.number);
+                added++;
+              } else if (!shouldMark && hasMarker) {
+                if (!dryRun) {
+                  await github.rest.issues.removeLabel({
+                    owner, repo, issue_number: issue.number, name: labelName
+                  });
+                }
+                core.info((dryRun ? 'WOULD REMOVE ' : 'REMOVED ') + labelName + ' from #' + issue.number);
+                removed++;
+              } else unchanged++;
+            }
+            await core.summary.addHeading('Uncategorised issue reconciliation')
+              .addRaw('Mode: ' + (number ? ('issue #' + number) : 'all open issues') +
+                '; dry run: ' + dryRun + '\\n')
+              .addRaw('Add: ' + added + '; remove: ' + removed +
+                '; unchanged: ' + unchanged + '; skipped: ' + skipped).write();
