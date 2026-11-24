@@ -32,6 +32,8 @@ For each finding, the workflow:
 3. Updates or reopens the existing GitHub issue if the finding still exists.
 4. Closes the GitHub issue and marks the row inactive when Codacy no longer reports it.
 
+The workflow sets the GitHub issue type to `Bug` when the generated labels include `bug`; otherwise it sets the type to `Maintenance`. Both issue types must be enabled for the organisation.
+
 The first successful run bootstraps any previously created Codacy issues from the target repo into Neon, so the migration from the old label-based approach is automatic.
 
 ---
@@ -158,3 +160,4 @@ The workflow creates and maintains a small managed label set, but labels are no 
 
 **Existing issues were duplicated after switching to Neon**
 -> The bootstrap step could not parse the old issue body or labels. Confirm the previous issues still contain the Codacy ID in the body or `codacy:` label.
+

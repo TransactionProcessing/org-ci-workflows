@@ -690,6 +690,7 @@ jobs:
                 const title = `[Codacy] ${ci.message}`;
                 const body = buildBody(ci);
                 const desiredLabels = buildLabels(ci);
+                const desiredIssueType = desiredLabels.includes("bug") ? "Bug" : "Maintenance";
                 const existingRecord = state.get(codacyIssueId);
 
                 if (!existingRecord) {
@@ -711,8 +712,18 @@ jobs:
                       title,
                       body,
                       labels: desiredLabels,
-                      assignees
+                      assignees,
+                      type: desiredIssueType
                     })).data;
+
+                    if (recoveredIssue) {
+                      await github.rest.issues.update({
+                        owner: context.repo.owner,
+                        repo: context.repo.repo,
+                        issue_number: issue.number,
+                        type: desiredIssueType
+                      });
+                    }
 
                     await saveRecord(ci, issue.number, true);
                   }
@@ -741,8 +752,18 @@ jobs:
                       title,
                       body,
                       labels: desiredLabels,
-                      assignees
+                      assignees,
+                      type: desiredIssueType
                     })).data;
+
+                    if (recoveredIssue) {
+                      await github.rest.issues.update({
+                        owner: context.repo.owner,
+                        repo: context.repo.repo,
+                        issue_number: replacementIssue.number,
+                        type: desiredIssueType
+                      });
+                    }
 
                     await saveRecord(ci, replacementIssue.number, true);
                   }
@@ -757,19 +778,21 @@ jobs:
                 const needsTitleUpdate = issue.title !== title;
                 const needsBodyUpdate = issue.body !== body;
                 const needsLabelUpdate = currentLabels.join("\u0000") !== nextLabels.join("\u0000");
+                const currentIssueType = typeof issue.type === "string" ? issue.type : issue.type?.name || "";
+                const needsIssueTypeUpdate = currentIssueType !== desiredIssueType;
                 const needsReopen = issue.state === "closed";
 
                 if (dryRun) {
                   if (needsReopen) {
                     stats.reopened++;
                   }
-                  if (needsTitleUpdate || needsBodyUpdate || needsLabelUpdate) {
+                  if (needsTitleUpdate || needsBodyUpdate || needsLabelUpdate || needsIssueTypeUpdate) {
                     stats.updated++;
                   }
                   continue;
                 }
 
-                if (needsTitleUpdate || needsBodyUpdate || needsLabelUpdate || needsReopen) {
+                if (needsTitleUpdate || needsBodyUpdate || needsLabelUpdate || needsIssueTypeUpdate || needsReopen) {
                   await github.rest.issues.update({
                     owner: context.repo.owner,
                     repo: context.repo.repo,
@@ -777,12 +800,13 @@ jobs:
                     title,
                     body,
                     labels: mergedLabels,
+                    type: desiredIssueType,
                     state: "open"
                   });
 
                   if (needsReopen) {
                     stats.reopened++;
-                  } else if (needsTitleUpdate || needsBodyUpdate || needsLabelUpdate) {
+                  } else if (needsTitleUpdate || needsBodyUpdate || needsLabelUpdate || needsIssueTypeUpdate) {
                     stats.updated++;
                   }
                 }
@@ -816,3 +840,4 @@ jobs:
               }
 
               console.log(JSON.stringify(stats, null, 2));
+
